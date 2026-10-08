@@ -401,6 +401,14 @@ class Learner:
             ens.add(spec, warm_start=True, warm_limit=limit)
             ens.add(ctl, warm_start=True, warm_limit=limit)
             return {"ok": True, "competitor": spec.id, "control": ctl.id}
+        if op == "forget_decisions":
+            # décisions reconnues comme fausses (ex. prix d'entrée périmé) : leurs labels et
+            # outcomes à venir ne doivent plus servir ni aux modèles ni au bandit
+            n = 0
+            for did in cmd.get("ids", []):
+                n += self.long_store.pop(did, None) is not None
+                n += self.cache.pop(did, None) is not None
+            return {"ok": True, "forgotten": n}
         if op == "reset_bandit":
             self.bandit = self._new_bandit()
             for st in self.long_store.values():

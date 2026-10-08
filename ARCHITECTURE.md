@@ -210,3 +210,9 @@ la chaîne (features génériques, labels, boucles 1–3) est indépendant de la
 
 Toute modification passe par `deploy/safe_deploy.sh` : zones protégées, tests dans une image candidate, contrôle de santé de 4 min et retour automatique à la version précédente en cas de problème.
 - Le suivi Claude Code (4×/jour) déploie ses corrections par ce même circuit et en rend compte sur Telegram.
+
+## Journal des évolutions
+
+Tenu par le suivi Claude Code : chaque évolution y est notée (date, changement, hypothèse, chiffre à surveiller), puis son bilan est fait aux passages suivants (annulation si elle dégrade les résultats).
+
+- **2026-10-08 — Prix d'entrée après migration** (commit 1727a53). Bug : les décisions prises sur un token déjà migré utilisaient le prix périmé de la bonding curve, alors que la suite du prix venait de PumpSwap → gains simulés fictifs (PnL médian +375 %, ~75 % des « x10 » des outcomes étaient faux). Correction : prix PumpSwap récent (< 60 s) ou abstention. Les décisions antérieures concernées ont été oubliées par le learner, purgées de la base, et le bandit a été remis à zéro. À surveiller : PnL moyen des outcomes du même ordre que le paper (quelques % par décision, pas des dizaines) ; labeler.migrated_followed > 0.

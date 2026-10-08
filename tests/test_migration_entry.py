@@ -57,3 +57,12 @@ def test_labeler_follows_fresh_migrations_without_decision():
     lab.on_event(Migration(mint="M", slot=0, ts=0.1, signature="m"))
     assert "M" in lab.migrated_mints(60.0)          # suivi sur PumpSwap pour obtenir un prix d'entrée
     assert "M" not in lab.migrated_mints(2000.0)    # puis abandonné s'il n'a donné lieu à aucune décision
+
+
+def test_learner_forgets_decisions():
+    from apex.learning.core import Learner
+    lr = Learner(Config.load())
+    lr.long_store["M:600"] = {"ts": 0.0, "point": "600", "mint": "M", "scores": {}, "alerted": False,
+                              "eligible": True, "preds": {}, "champions": {}}
+    assert lr.apply_command({"op": "forget_decisions", "ids": ["M:600", "inconnu"]})["forgotten"] == 1
+    assert "M:600" not in lr.long_store
