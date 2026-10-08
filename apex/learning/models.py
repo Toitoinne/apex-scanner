@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 from river import compose, drift, forest, linear_model, optim, preprocessing, tree
 
-from .calibration import Calibrator
+from .calibration import Calibrator, sigmoid
 
 EPS = 1e-6
 
@@ -57,7 +57,9 @@ def rules_score(x: dict[str, float]) -> float:
          - 1.5 * g("dev_sold_pct")
          - 1.0 * g("wash_score")
          - 1.0 * g("max_drawdown_so_far"))
-    return 1 / (1 + math.exp(-z))
+    # sigmoïde stable : une feature aberrante (z très négatif) faisait déborder math.exp
+    # et toute la décision était ignorée par le learner
+    return sigmoid(z)
 
 
 def build_river_model(spec: CompetitorSpec, seed: int = 42) -> Any:
