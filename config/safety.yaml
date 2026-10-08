@@ -1,0 +1,11 @@
+# FILTRES DE SÉCURITÉ DURS — appliqués AVANT tout modèle, jamais désappris.
+# Ce fichier est monté en lecture seule dans les conteneurs. Aucune boucle
+# automatique ne peut le modifier : le système peut seulement PROPOSER une
+# modification dans son rapport (section "propositions sécurité").
+bundle_creation_slot_supply_pct: 0.25   # > 25 % de la supply achetée dans le slot de création
+mint_authority_active: block
+freeze_authority_active: block
+dev_rug_count_max: 2                    # dev avec >= 2 rugs connus = bloqué
+dev_rug_rate_max: 0.6                   # ... ou taux de rug > 60 % sur >= 3 tokens
+top10_concentration_max: 0.60           # top 10 holders (hors bonding curve) > 60 %
+dev_holding_max: 0.20                   # dev détient > 20 %

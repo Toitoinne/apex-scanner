@@ -1,0 +1,79 @@
+# Nom de projet fixe : les volumes s'appellent apexscanner_* sur toutes les machines (migration VPS)
+name: apexscanner
+
+x-apex: &apex
+  build: .
+  image: apex-scanner:latest
+  env_file: .env
+  environment:
+    REDIS_URL: redis://redis:6379/0
+    DATABASE_URL: postgresql://apex:${POSTGRES_PASSWORD:-apex}@db:5432/apex
+    DATA_DIR: /data
+  volumes:
+    - ./config:/app/config:ro          # config + filtres de sécurité en LECTURE SEULE
+    - apexdata:/data
+  restart: unless-stopped
+  depends_on:
+    db: {condition: service_healthy}
+    redis: {condition: service_healthy}
+    migrate: {condition: service_completed_successfully}
+  logging:
+    driver: json-file
+    options: {max-size: "20m", max-file: "5"}
+
+services:
+  db:
+    # version épinglée (TimescaleDB 2.30.2 / PostgreSQL 16.15) : indispensable pour relire les données copiées
+    image: timescale/timescaledb@sha256:6f139d56042989bd35f50ba5986e492cd32e35cc6778c50be2659add298dc09f
+    environment:
+      POSTGRES_USER: apex
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-apex}
+      POSTGRES_DB: apex
+    command: ["postgres", "-c", "shared_buffers=512MB", "-c", "work_mem=16MB", "-c", "max_connections=60",
+              "-c", "shared_preload_libraries=timescaledb", "-c", "timescaledb.telemetry_level=off"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apex"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "1gb", "--maxmemory-policy", "noeviction"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    <<: *apex
+    command: ["migrate"]
+    restart: "no"
+    depends_on:
+      db: {condition: service_healthy}
+
+  backfill:
+    <<: *apex
+    command: ["backfill"]
+    restart: "no"
+    profiles: ["backfill"]
+
+  ingestor:   {<<: *apex, command: ["ingestor"]}
+  features:   {<<: *apex, command: ["features"]}
+  labeler:    {<<: *apex, command: ["labeler"]}
+  learner:    {<<: *apex, command: ["learner"]}
+  supervisor: {<<: *apex, command: ["supervisor"]}
+  notifier:   {<<: *apex, command: ["notifier"]}
+  trader:     {<<: *apex, command: ["trader"]}
+  dashboard:
+    <<: *apex
+    command: ["dashboard"]
+    ports: ["127.0.0.1:8080:8080"]    # accès via tunnel SSH : ssh -L 8080:localhost:8080 vps
+
+volumes:
+  pgdata:
+  redisdata:
+  apexdata:

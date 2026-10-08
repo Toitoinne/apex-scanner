@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APEX Scanner</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --text:#e6e8ee; --muted:#8a91a3; --accent:#5b9cff;
+          --good:#3ecf8e; --bad:#ff5d6c; --warn:#f5b84a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:12px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; letter-spacing:.04em; }
+  #verdict { color:var(--muted); font-size:13px; }
+  nav { display:flex; gap:4px; padding:8px 16px; overflow-x:auto; border-bottom:1px solid var(--line); }
+  nav button { background:none; border:0; color:var(--muted); padding:6px 10px; border-radius:6px; cursor:pointer; white-space:nowrap; font:inherit; }
+  nav button.on { background:var(--panel); color:var(--text); }
+  main { padding:16px; max-width:1400px; margin:0 auto; }
+  section { display:none; } section.on { display:block; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; overflow:auto; }
+  .card h3 { margin:0 0 8px; font-size:13px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:500; }
+  .mono { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; background:var(--line); }
+  .PROGRESSION, .AMELIORATION, .promoted, .improvement { color:var(--good); }
+  .REGRESSION, .REGRESSION_TYPE, .DEGRADATION, .rolled_back, .degradation { color:var(--bad); }
+  .PLATEAU, .DECALIBRATION, .DERIVE_MARCHE, .SEUIL_PERMISSIF, .SEUIL_STRICT, .evaluating { color:var(--warn); }
+  select { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:4px 8px; font:inherit; }
+  .controls { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+  canvas { max-height:380px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<header><h1>APEX SCANNER</h1><span id="verdict"></span></header>
+<nav id="tabs"></nav>
+<main>
+  <section id="live"><div class="card"><h3>Classement live (15 min)</h3><table id="t-live"></table></div></section>
+  <section id="curves">
+    <div class="controls"><select id="curve-sel"></select><select id="win-sel"><option>1h</option><option>6h</option><option>24h</option><option>7d</option></select></div>
+    <div class="card"><h3 id="curve-title">Courbe</h3><canvas id="c-curve"></canvas></div>
+    <div class="card" style="margin-top:12px"><h3>États détectés</h3><table id="t-states"></table></div>
+  </section>
+  <section id="models"><div class="grid" id="models-grid"></div></section>
+  <section id="calib"><div class="grid"><div class="card"><h3>Calibration 24 h</h3><canvas id="c-calib"></canvas></div><div class="card"><h3>Erreurs 24 h par type</h3><table id="t-errors"></table></div></div></section>
+  <section id="eff"><div class="card"><h3>Table d'efficacité des corrections</h3><table id="t-eff"></table></div><div class="card" style="margin-top:12px"><h3>Dernières corrections</h3><table id="t-corr"></table></div></section>
+  <section id="claude"><div class="card"><h3>Propositions de Claude</h3><table id="t-props"></table></div><div class="card" style="margin-top:12px"><h3>Features proposées</h3><table id="t-feats"></table></div></section>
+  <section id="alerts"><div class="card"><h3 id="paper-title">Paper trading</h3><table id="t-paper"></table></div>
+    <div class="card" style="margin-top:12px"><h3>Alertes et résultats</h3><table id="t-alerts"></table></div></section>
+  <section id="wallets"><div class="grid"><div class="card"><h3>Smart wallets</h3><table id="t-wallets"></table></div><div class="card"><h3>Devs ruggers</h3><table id="t-devs"></table></div></div></section>
+</main>
+<script>
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+const api = p => fetch(p + (p.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN)).then(r => r.json());
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const pct = v => v == null ? "" : (v * 100).toFixed(1) + "%";
+const num = (v, d=3) => v == null ? "" : Number(v).toFixed(d);
+const time = t => t ? new Date(t).toLocaleString("fr-FR") : "";
+function table(id, cols, data) {
+  document.getElementById(id).innerHTML = "<tr>" + cols.map(c => `<th>${c[0]}</th>`).join("") + "</tr>" +
+    data.map(r => "<tr>" + cols.map(c => `<td>${c[1](r)}</td>`).join("") + "</tr>").join("");
+}
+const TABS = [["live","Live"],["curves","Courbes d'erreur"],["models","Modèles"],["calib","Calibration"],["eff","Corrections"],["claude","Claude"],["alerts","Alertes"],["wallets","Wallets & devs"]];
+const nav = document.getElementById("tabs");
+TABS.forEach(([id, label], i) => { const b = document.createElement("button"); b.textContent = label; b.onclick = () => show(id); b.id = "b-" + id; nav.appendChild(b); });
+const loaders = {};
+function show(id) {
+  TABS.forEach(([t]) => { document.getElementById(t).classList.toggle("on", t === id); document.getElementById("b-" + t).classList.toggle("on", t === id); });
+  (loaders[id] || (() => {}))();
+}
+const charts = {};
+function chart(id, cfg) { if (charts[id]) charts[id].destroy(); charts[id] = new Chart(document.getElementById(id), cfg); }
+Chart.defaults.color = "#8a91a3"; Chart.defaults.borderColor = "#262b36";
+
+loaders.live = async () => {
+  const d = await api("/api/live");
+  table("t-live", [["Proba", r => `<b>${pct(r.p_cal)}</b>`], ["Token", r => esc(r.name) + " <span class='pill'>$" + esc(r.symbol) + "</span>"],
+    ["Point", r => esc(r.point)], ["MC (SOL)", r => num(r.mc_sol, 0)], ["Drapeaux", r => r.blocked ? "<span class='REGRESSION'>BLOQUÉ</span> " + esc((r.safety_flags||[]).join(", ")) : esc((r.safety_flags||[]).join(", "))],
+    ["Mint", r => `<a class="mono" target="_blank" href="https://dexscreener.com/solana/${esc(r.mint)}">${esc(r.mint.slice(0,10))}…</a>`]], d);
+};
+loaders.curves = async () => {
+  const sel = document.getElementById("curve-sel");
+  if (!sel.options.length) {
+    (await api("/api/curve_names")).forEach(c => sel.add(new Option(c, c)));
+    sel.value = "error_rate"; sel.onchange = loaders.curves; document.getElementById("win-sel").onchange = loaders.curves;
+  }
+  const curve = sel.value || "error_rate", win = document.getElementById("win-sel").value;
+  const d = await api(`/api/curves?curve=${encodeURIComponent(curve)}&win=${win}`);
+  document.getElementById("curve-title").textContent = curve + " · fenêtre " + win;
+  const pts = d.points.map(p => ({x: new Date(p.ts), y: p.value}));
+  const ymax = Math.max(...pts.map(p => p.y), d.reference || 0) * 1.05 || 1;
+  const corr = d.corrections.map(c => ({x: new Date(c.ts), y: ymax, label: `#${c.id} ${c.action} (${c.status})`}));
+  const datasets = [{label: curve, data: pts, borderColor: "#5b9cff", pointRadius: 0, tension: .2}];
+  if (d.reference != null) datasets.push({label: "référence (backfill)", data: pts.length ? [{x: pts[0].x, y: d.reference}, {x: pts[pts.length-1].x, y: d.reference}] : [], borderColor: "#8a91a3", borderDash: [6,4], pointRadius: 0});
+  datasets.push({label: "corrections", data: corr, type: "scatter", backgroundColor: "#f5b84a", pointStyle: "triangle", pointRadius: 7});
+  chart("c-curve", {type: "line", data: {datasets}, options: {parsing: true, scales: {x: {type: "time", time: {}}}, plugins: {tooltip: {callbacks: {label: c => c.raw.label || `${c.dataset.label}: ${num(c.raw.y, 4)}`}}}}});
+  const st = await api("/api/states");
+  table("t-states", [["Courbe", r => esc(r.curve)], ["État", r => `<span class="${esc(r.state)}">${esc(r.state)}</span>`], ["Pente/h", r => num(r.slope, 5)], ["p", r => num(r.p_value)], ["Mis à jour", r => time(r.ts)]], st);
+};
+loaders.models = async () => {
+  const d = await api("/api/models"); const g = document.getElementById("models-grid"); g.innerHTML = "";
+  document.getElementById("verdict").textContent = d.paused ? "⏸ alertes en pause" : `config ${d.config_version || ""} · ${d.n_labels || 0} labels appris`;
+  Object.entries(d.ensembles || {}).forEach(([h, e]) => {
+    const div = document.createElement("div"); div.className = "card"; div.innerHTML = `<h3>${esc(h)} · champion ${esc(e.champion)}</h3><table id="m-${h}"></table>`; g.appendChild(div);
+    table("m-" + h, [["Modèle", r => (r.id === e.champion ? "👑 " : "") + esc(r.id)], ["Type", r => esc(r.kind)], ["Logloss", r => num(r.logloss, 4)], ["Exactitude", r => pct(r.accuracy)], ["Appris", r => r.n_learned], ["Dérives", r => r.drift_events], ["Ombre de", r => r.spec.shadow_of_correction ? "#" + r.spec.shadow_of_correction : ""]],
+      [...e.competitors].sort((a, b) => (a.logloss ?? 9) - (b.logloss ?? 9)));
+  });
+  const b = d.bandit || {}; const div = document.createElement("div"); div.className = "card"; div.innerHTML = `<h3>Bandit d'alerte · actif ${esc(b.active)} · plage ${esc(JSON.stringify(b.range))}</h3><table id="m-bandit"></table>`; g.appendChild(div);
+  table("m-bandit", [["Bras", r => esc(r.key)], ["Récompense moy.", r => num(r.mean_reward, 3)], ["n", r => r.n], ["Alertes/j", r => r.alerts_per_day]], b.arms || []);
+};
+loaders.calib = async () => {
+  const d = await api("/api/calibration");
+  const t = d.table.filter(r => r.n > 0);
+  chart("c-calib", {type: "line", data: {datasets: [
+    {label: `observé (ECE ${num(d.ece, 3)}, n=${d.n})`, data: t.map(r => ({x: r.p_mean, y: r.freq})), borderColor: "#5b9cff"},
+    {label: "parfait", data: [{x:0,y:0},{x:1,y:1}], borderColor: "#8a91a3", borderDash: [6,4], pointRadius: 0}]},
+    options: {scales: {x: {type: "linear", min: 0, max: 1, title: {display: true, text: "probabilité annoncée"}}, y: {min: 0, max: 1, title: {display: true, text: "fréquence réelle"}}}}});
+  table("t-errors", [["Type", r => esc(r.label)], ["Nombre", r => r.n], ["Coût (SOL)", r => num(r.cost, 2)]], await api("/api/errors"));
+};
+loaders.eff = async () => {
+  table("t-eff", [["État", r => esc(r.state)], ["Contexte", r => esc(r.context)], ["Correction", r => esc(r.action)], ["n", r => r.n], ["Succès", r => r.n_success], ["Échecs", r => r.n_fail], ["Gain moyen", r => pct(r.mean_gain)]], await api("/api/efficacy"));
+  table("t-corr", [["#", r => r.id], ["Date", r => time(r.ts)], ["Problème", r => esc(r.problem_key)], ["Action", r => esc(r.action)], ["Statut", r => `<span class="${esc(r.status)}">${esc(r.status)}</span>`], ["Effet", r => r.effect ? `${esc(r.effect.verdict)} ${pct(r.effect.gain)} (p=${num(r.effect.p_value)})` : ""]], await api("/api/corrections"));
+};
+loaders.claude = async () => {
+  const d = await api("/api/claude");
+  table("t-props", [["Date", r => time(r.ts)], ["Déclencheur", r => esc(r.trigger)], ["Problème", r => esc(r.problem_type)], ["Hypothèse", r => `<span style="white-space:normal">${esc(r.hypothesis)}</span>`], ["Statut", r => esc(r.status)]], d.proposals);
+  table("t-feats", [["Feature", r => `<span class="mono">${esc(r.feature_id)}</span>`], ["Description", r => `<span style="white-space:normal">${esc(r.description)}</span>`], ["Statut", r => esc(r.status)], ["Raison", r => `<span style="white-space:normal">${esc(r.reason)}</span>`]], d.features);
+};
+loaders.alerts = async () => {
+  const pp = await api("/api/paper"); const s = pp.stats;
+  document.getElementById("paper-title").textContent = `Paper trading · ${s.n} positions · réalisé ${num(s.realized, 3)} SOL · latent ${num(s.latent, 3)} SOL · gagnantes ${s.wins}/${s.closed}`;
+  table("t-paper", [["Ouverte", r => time(r.opened_at)], ["Token", r => "$" + esc(r.symbol)], ["Stratégie", r => esc(r.policy)],
+    ["Statut", r => esc(r.status)], ["PnL", r => `<span class="${(r.pnl||0) >= 0 ? "PROGRESSION" : "REGRESSION"}">${pct(r.pnl)}</span>`],
+    ["SOL", r => num(r.pnl_sol, 3)], ["Max", r => r.max_multiple ? "x" + num(r.max_multiple, 2) : ""],
+    ["Signaux", r => esc((r.fills || []).map(f => f.kind + " x" + num(f.multiple, 2)).join(" → "))]], pp.positions);
+  table("t-alerts", [["Date", r => time(r.ts)], ["Token", r => esc(r.name) + " $" + esc(r.symbol)], ["Point", r => esc(r.point)], ["p", r => pct(r.p)], ["+15 min", r => r.result_15 ? pct(r.result_15.pnl) : "…"], ["+60 min", r => r.result_60 ? `<span class="${r.result_60.y ? "PROGRESSION" : "REGRESSION"}">${pct(r.result_60.pnl)}</span> ${esc(r.result_60.error_type || "")}` : "…"], ["Modèle", r => esc(r.model_id)]], await api("/api/alerts"));
+};
+loaders.wallets = async () => {
+  table("t-wallets", [["Wallet", r => `<a class="mono" target="_blank" href="https://solscan.io/account/${esc(r.address)}">${esc(r.address.slice(0,12))}…</a>`], ["Trades", r => r.n_trades], ["Gagnants", r => r.n_wins], ["PnL (SOL)", r => num(r.pnl_sol, 2)]], await api("/api/wallets"));
+  table("t-devs", [["Dev", r => `<a class="mono" target="_blank" href="https://solscan.io/account/${esc(r.address)}">${esc(r.address.slice(0,12))}…</a>`], ["Tokens", r => r.n_tokens], ["Rugs", r => r.n_rugs], ["Gagnants", r => r.n_winners]], await api("/api/devs"));
+};
+show("live");
+setInterval(() => { const on = TABS.find(([t]) => document.getElementById(t).classList.contains("on")); if (on && ["live","models"].includes(on[0])) loaders[on[0]](); }, 10000);
+</script>
+</body>
+</html>

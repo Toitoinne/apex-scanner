@@ -1,0 +1,256 @@
+# APEX SCANNER — configuration principale.
+# Les boucles automatiques (boucle 2/3) ne modifient JAMAIS ce fichier : elles
+# appliquent des surcharges runtime journalisées (table `corrections`) et
+# réversibles. Les filtres de sécurité sont dans safety.yaml (jamais modifiés).
+
+chain: solana
+
+ingestion:
+  # helius_logs : logsSubscribe sur le programme pump.fun (flux complet, décodage
+  #               des events Anchor). pumpportal : créations/migrations gratuites,
+  #               trades facturés (abonnement sélectif). Les deux peuvent tourner
+  #               en parallèle : déduplication par signature.
+  # public_logs : websocket(s) gratuit(s) de SOLANA_WS_URLS (défaut : RPC public Solana).
+  # helius_logs : flux via Helius — FACTURÉ 20 crédits/Mo ; le flux pump.fun complet
+  #   (plusieurs Go/jour) dépasserait l'offre gratuite (1 M crédits/mois). Réservé à un plan payant.
+  # Les crédits Helius gratuits servent uniquement à l'enrichissement ciblé (1 crédit/appel).
+  # pumpswap : trades PumpSwap des seuls pools suivis (tokens migrés), abonnement dynamique
+  sources: [public_logs, pumpportal, pumpswap]
+  pump_program_id: "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+  pumpportal_trades: false          # true = abonnement trades PumpPortal (payant)
+  # Voie rapide : abonnement Helius (temps réel, complet) aux seuls tokens candidats / en position.
+  # Mesuré : flux public ≈ 3 s de retard (p90 5,7 s) et ~15 % de transactions manquées ; Helius ≈ 0 s.
+  fastlane: {enabled: true, daily_credits: 12000, max_mints: 20, max_candidates: 6}
+  curve_tolerance: 0.02             # seuls les trades de la courbe SOL standard (k = 30 × 1,073 Md) sont acceptés
+  watchdog:
+    stall_s: 30                     # source muette 30 s → reconnexion forcée
+    backup_after_s: 45              # vraie panne (> 45 s) seulement → secours Helius (les micro-coupures
+                                    # sont absorbées par la reconnexion immédiate et marquées comme trous)
+    release_after_s: 60             # sources gratuites saines 1 min → arrêt du secours (20 crédits/Mo)
+    outage_alert_s: 60              # alerte Telegram immédiate après 60 s de panne
+    helius_backup: true
+    monthly_credit_cap: 980000      # plafond TOTAL Helius (enrichissement + secours) < 1 M gratuits
+    backup_reserve_credits: 150000  # l'enrichissement s'arrête avant d'entamer cette réserve du secours
+  reconnect_backoff_s: [1, 2, 5, 10, 30]
+  dedupe_ttl_s: 900
+  stream_maxlen: 300000            # ~2 h de flux en mémoire Redis (petit VPS)
+
+decision_points_s: [10, 15, 30, 60, 120, 300, 600]   # entrées très précoces : là où se repèrent les x10
+# Point de décision à la migration : actif depuis que les trades PumpSwap (après migration) sont suivis
+# en direct (sans eux, les labels de ce point seraient faux).
+decision_on_migration: true      # prix PumpSwap désormais suivis en direct
+track_horizon_s: 86400                        # suivi jusqu'à 24 h
+token_idle_close_s: 3600                      # clôture si aucun trade pendant 1 h après L60
+reference_trade_sol: 1.0                      # taille de référence pour le prix d'entrée
+
+labels:
+  L2:  {horizon_s: 120,  up: 0.30, down: 0.30}
+  L5:  {horizon_s: 300,  up: 0.50, down: 0.40}
+  L15: {horizon_s: 900,  up: 1.00, down: 0.50}
+  L60: {horizon_s: 3600, up: 1.00, down: 0.50}
+  # objectifs « gros multiplicateurs » : atteindre ×5 en 6 h, ×10 en 24 h (prix PumpSwap inclus)
+  X5_6H:   {horizon_s: 21600, reach: 5.0}
+  X10_24H: {horizon_s: 86400, reach: 10.0}
+  primary: L60
+  # trou de données toléré par horizon (s) : rater 1–2 min de trades sur une fenêtre d'1 h change
+  # très rarement le label ; sur 2 min, aucun trou n'est toléré
+  gap_tolerance_s: {L2: 0, L5: 10, L15: 60, L60: 120, X5_6H: 900, X10_24H: 1800}
+  rug: {drop_from_peak: 0.90, window_s: 600}
+
+exits:
+  fee: 0.02                     # frais + slippage par vente (estimation prudente)
+  policies:
+    TP2_SL50:      {stop_loss: 0.5, take_profits: [[2.0, 1.0]], time_limit_s: 3600, danger_exit: false,
+                    description: "tout vendre à x2, stop −50 %, 1 h max"}
+    RECUP_TRAIL40: {stop_loss: 0.5, take_profits: [[2.0, 0.5]], trail: 0.40, time_limit_s: 86400,
+                    description: "récupérer la mise à x2 (vendre 50 %), laisser courir le reste avec un stop suiveur −40 %"}
+    RECUP_TRAIL25: {stop_loss: 0.4, take_profits: [[2.0, 0.5]], trail: 0.25, time_limit_s: 86400,
+                    description: "récupérer la mise à x2, stop suiveur serré −25 %, stop initial −40 %"}
+    ECHELLE:       {stop_loss: 0.5, take_profits: [[2.0, 0.34], [5.0, 0.33]], trail: 0.50, time_limit_s: 86400,
+                    description: "vendre 1/3 à x2, 1/3 à x5, le reste avec un stop suiveur −50 %"}
+    MOONSHOT:      {stop_loss: 0.6, take_profits: [[3.0, 0.33], [10.0, 0.33]], trail: 0.50, trail_activate: 2.0, time_limit_s: 86400,
+                    description: "viser les gros multiplicateurs : 1/3 à x3, 1/3 à x10, stop suiveur −50 % dès x2"}
+
+# Aptitude au trading réel : jugée UNIQUEMENT sur le paper trading (frais + slippage compris).
+trading:
+  live_enabled: false           # le trading réel ne s'active que sur décision de l'utilisateur
+  criteria:
+    min_positions: 100          # positions clôturées
+    min_days: 7                 # jours de recul
+    min_return: 0.10            # +10 % par mise en moyenne
+    min_profit_factor: 1.3      # gains / pertes
+    min_positive_days: 0.55     # part des jours gagnants
+    max_drawdown_stakes: 15     # pire repli, en nombre de mises
+    min_recent_return: 0.0      # les 30 dernières positions ne doivent pas perdre
+    suspend_recent_return: -0.15   # SUSPENSION si les 30 dernières perdent > 15 % par mise
+    suspend_drawdown_stakes: 10    # … ou si le repli récent dépasse 10 mises
+    resume_positions: 50        # reprise : critères re-prouvés sur ≥ 50 positions après la suspension
+
+# Réinvestissement des gains RÉELS (le système recommande, l'utilisateur décide et paie)
+reinvest:
+  share: 0.5                    # part des gains mensuels consacrée à l'amélioration du bot
+  sol_eur: 150
+  options:                      # par ordre de priorité
+    - {name: "Helius Developer (voie rapide élargie, plus de wallets vérifiés)", eur_month: 46}
+    - {name: "Plus d'appels Claude (4/jour)", eur_month: 15}
+    - {name: "VPS 16 Go (plus de modèles, historique plus long)", eur_month: 15}
+    - {name: "Backfill Dune (pré-entraînement sur l'historique)", eur_month: 40}
+    - {name: "Helius Business / LaserStream (flux complet temps réel)", eur_month: 460}
+
+# Système d'ordres. Mode SIMULATION tant que le trading réel n'est pas déverrouillé
+# (live_enabled + état ACTIF + /activer + portefeuille dédié + pas de /stop).
+execution:
+  latency_s: 2.0                # délai signal → transaction exécutée (prix pris à ce moment-là)
+  max_buy_slippage: 0.15        # au-delà, l'achat échoue (comme on-chain)
+  sell_slippages: [0.15, 0.30, 0.60, 1.0]   # tolérances successives si une vente échoue
+  priority_fee_sol: 0.0005      # frais réseau par transaction
+  platform_fee_pct: 0.5         # PumpPortal (API Local)
+  check_pumpportal: true        # simulation : construit et vérifie la vraie transaction, sans l'envoyer
+  dry_run_pubkey: F2LfjqW8SGsxzsY4XZbc7XqjTfTjkgPRNnNWoazcjJKv   # adresse fictive utilisée pour ces vérifications
+
+# Limites de risque (appliquées aussi en simulation, pour des résultats fidèles)
+risk:
+  sol_per_trade: 0.1
+  max_open_positions: 3
+  daily_loss_limit_sol: 0.3
+  max_trades_per_day: 20
+  min_wallet_reserve_sol: 0.05
+
+paper:
+  enabled: true
+  notional_sol: 0.1             # mise simulée par alerte
+
+pricefeed:
+  poll_s: 20                    # prix PumpSwap des tokens migrés (DexScreener, gratuit)
+  min_liquidity_usd: 5000       # ignore les pools minuscules (prix manipulables)
+  max_jump: 5.0                 # un saut > x5 / < ÷5 doit être confirmé par le relevé suivant
+  batch: 30
+
+fees:
+  pump_fee_bps: 125          # frais protocole + créateur (à vérifier, évolue)
+  pumpswap_fee_bps: 30
+
+features:
+  smart_wallet_min_trades: 8
+  smart_wallet_min_winrate: 0.35
+  sniper_slot_window: 2       # achats dans les N slots suivant la création = snipers
+  # Enrichissement CIBLÉ : les appels RPC (graphe de financement, autorités mint/freeze)
+  # ne sont faits que pour les tokens candidats à une alerte, sous un budget de crédits
+  # compatible avec l'offre gratuite Helius. Les tokens non candidats ne seront jamais
+  # alertés : l'information y serait inutile.
+  enrichment_daily_credit_budget: 15000   # ≈ 450 k/mois ; + voie rapide ≤ 12 000/jour (≈ 360 k) ; reste : secours
+  enrichment_rate_per_min: 300           # 5 appels RPC/s au total : sous la limite gratuite de 10 req/s
+  candidate_trigger_buyers: 20            # ≥ 20 acheteurs uniques dans les 30 premières s → candidat
+  candidate_p_ratio: 0.6                  # ou proba du champion ≥ 60 % du seuil d'alerte actif
+  enrichment_max_wallets_per_token: 15    # les 15 plus gros acheteurs
+  enrichment_hourly_burst: 1.5            # max par heure = quota/24 × 1,5 (budget lissé sur la journée)
+  funding_lookup_budget_per_min: 60
+  funding_hops: 2
+  narrative_window_s: 3600
+  claude_feature_timeout_ms: 5
+  # candidates = vérification RPC des autorités mint/freeze pour les seuls candidats (bloquant si active)
+  # all = tous les tokens (1 crédit/token) ; none = hypothèse pump.fun (révoquées à la création)
+  check_authorities: candidates
+
+models:
+  horizons: [L2, L5, L15, L60, X5_6H, X10_24H]
+  champion_window: 3000
+  champion_margin: 0.01          # le challenger doit battre le champion de 1 % (logloss)
+  champion_patience: 3           # ... sur N évaluations consécutives (amortissement)
+  champion_eval_every_s: 300
+  min_samples_for_champion: 500
+  max_competitors: 16
+  shadow_warm_start: 10000        # démarrage à chaud des ombres (mêmes données pour les deux jumeaux)
+  lgbm_every_s: 3600
+  lgbm_window: 40000
+  lgbm_min_samples: 2000
+  arf_n_models: 10
+  replay_size: 50000
+  error_weights:                 # poids d'apprentissage par type d'erreur (ajustables boucle 2)
+    RUG_ALERTE: 4.0
+    BUNDLE_RATE: 3.0
+    ENTREE_TARDIVE: 2.0
+    FAUX_SMART_MONEY: 2.0
+    MORT_LENTE: 1.5
+    GAGNANT_MANQUE: 3.0
+    GAGNANT_DETECTE_TROP_TARD: 2.0
+    AUTRE: 1.5
+  positive_class_weight: 3.0
+  max_sample_weight: 10.0
+
+calibration:
+  method: platt                  # platt | isotonic
+  isotonic_window: 5000
+
+bandit:
+  # Le bandit choisit ensemble : le SCORE (proba x2 en 1 h, ou proba x10 en 24 h), le SEUIL,
+  # le POINT de décision et la STRATÉGIE DE SORTIE. Récompense = PnL réel simulé de la stratégie.
+  # probabilités CALIBRÉES : avec ~1–2 % de gagnants, un bon signal est souvent entre 5 et 30 %
+  thresholds: [0.03, 0.05, 0.07, 0.10, 0.13, 0.16, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.70]
+  scores:
+    x2:  {horizon: L60,     thresholds: [0.03, 0.05, 0.07, 0.10, 0.13, 0.16, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.70]}
+    x10: {horizon: X10_24H, thresholds: [0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12]}
+  policies: [TP2_SL50, RECUP_TRAIL40, RECUP_TRAIL25, ECHELLE, MOONSHOT]
+  decision_points: ["10", "15", "30", "60", "120", "300", "600", "migration"]
+  resample_every_s: 1800
+  discount: 0.999                # oubli exponentiel des postérieurs
+  alerts_per_day: {min: 10, max: 30}
+  warmup_labels: 3000             # aucune alerte tant que le modèle n'a pas appris sur N labels L60 (≈ 1–2 h de flux)
+  min_buyers_to_alert: 10         # pas d'alerte sur un token avec moins de 10 acheteurs uniques
+  alerts_per_hour_max: 4          # étale les alertes sur la journée
+  min_observed_s: 3600            # le bandit observe 1 h de décisions avant sa première alerte
+  sim_trade: {take_profit: 1.0, stop_loss: 0.5, horizon_s: 3600}
+
+errors:
+  default_threshold: 0.13       # seuil x2 de référence pour classer les erreurs si le bandit vise x10
+  cost_notional_sol: 1.0
+  late_entry_runup: 3.0          # multiplicateur depuis le lancement au moment de l'alerte
+  late_entry_max_return: 0.10    # rendement max post-alerte sous lequel l'entrée est "tardive"
+  bundle_slot_supply_pct: 0.15
+  fake_smart_share: 0.20
+  slow_death_min_dd: 0.30
+
+supervision:
+  cycle_s: 900
+  windows_s: {"1h": 3600, "6h": 21600, "24h": 86400, "7d": 604800}
+  trend_bucket_s: 3600
+  trend_lookback_h: 24
+  trend_alpha: 0.05
+  plateau_hours: 6
+  ece_threshold: 0.08
+  drift_ks_alpha: 0.01
+  drift_feature_share: 0.25
+  min_events_per_bucket: 20
+  effect_delay_s: 10800          # mesure de l'effet d'une correction après 3 h
+  effect_alpha: 0.05
+  max_corrections_per_hour: 2
+  max_failures_before_freeze: 3
+  precision_floor: 0.15          # (indicatif, affiché dans les rapports)
+  paper_pnl_floor: -0.30         # paper trading < −30 % sur ≥ 20 positions → alertes plus sélectives
+  strong_regression_ratio: 1.5   # alerte immédiate si erreur > 1,5 × référence
+  meta_explore: 0.15
+  snapshot_every_s: 900
+  snapshot_keep: 40
+  self_reference_after_h: 24     # sans backfill : courbes de référence = 12–24 h de live
+
+claude:
+  model: claude-opus-5-5
+  effort: medium                 # défaut d'Opus 5.5 ; moins de tokens de sortie
+  cycle_s: 43200                 # 1 appel planifié toutes les 12 h
+  max_calls_per_day: 2           # plafond dur (déclencheurs plateau/régression inclus) ≈ 0,15–0,25 $/appel
+  max_errors_in_prompt: 20
+  sandbox_timeout_s: 10
+
+reports:
+  every_s: 21600
+  daily_hour_utc: 7
+
+backfill:
+  provider: none                 # none = démarrage à froid gratuit ; dune = backfill (crédits Dune)
+  days: 3
+  sample_mod: 64                 # échantillon réduit si tu essaies le plan Dune gratuit                  # 1 token sur N (coût Dune)
+  dune_query_id: 0               # id de la requête Dune créée depuis sql/dune_backfill.sql
+
+dashboard:
+  host: 0.0.0.0
+  port: 8080
