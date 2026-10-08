@@ -1,0 +1,5 @@
+# HTTPS public (certificat Let's Encrypt automatique) devant la porte d'entrée du suivi.
+# sslip.io : nom gratuit qui pointe vers l'IP du serveur, nécessaire pour obtenir un certificat.
+188-245-234-9.sslip.io {
+	reverse_proxy 127.0.0.1:8787
+}
