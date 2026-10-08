@@ -40,6 +40,7 @@ BAD=$(git diff --name-only "$OLD" "$NEW" | grep -E '^(config/safety\.yaml|apex/s
 [ -z "$BAD" ] || refuse "fichiers protégés modifiés : $(echo $BAD)"
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+chmod 755 "$TMP"   # lisible par l'utilisateur non-root (apex) du conteneur candidat
 git archive "$NEW" | tar -x -C "$TMP"
 git show "$OLD:config/config.yaml" > "$TMP/old_config.yaml"
 
