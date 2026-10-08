@@ -209,3 +209,4 @@ la chaîne (features génériques, labels, boucles 1–3) est indépendant de la
 ## Mises à jour
 
 Toute modification passe par `deploy/safe_deploy.sh` : zones protégées, tests dans une image candidate, contrôle de santé de 4 min et retour automatique à la version précédente en cas de problème.
+- Le suivi Claude Code (4×/jour) déploie ses corrections par ce même circuit et en rend compte sur Telegram.
