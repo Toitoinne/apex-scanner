@@ -8,6 +8,7 @@ cd /opt/apex
 MODE="${SSH_ORIGINAL_COMMAND:-report}"
 ARG="${MODE#* }"; [ "$ARG" = "$MODE" ] && ARG=""
 MODE="${MODE%% *}"
+echo "$(date -u '+%F %T') $MODE" >> /var/log/apex-followup.log   # lu par followup_watchdog.sh
 
 case "$MODE" in
 deploy)
