@@ -125,3 +125,5 @@ features → filtres → labeler → learner → bandit → commandes de correct
 - Frais pump.fun (`fees.pump_fee_bps`) : vérifie la valeur actuelle.
 - Aucun résultat passé ou simulé ne garantit un résultat futur. Ce logiciel n'est pas
   un conseil en investissement.
+
+> Les modifications du code passent par un circuit de déploiement sécurisé (`deploy/safe_deploy.sh`) : zones protégées, tests, contrôle de santé et retour arrière automatique.
