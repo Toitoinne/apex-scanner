@@ -9,7 +9,7 @@ import math
 import time
 from typing import Any, Callable
 
-from ..events import Decision, Migration, TokenCreated, Trade
+from ..events import Decision, Migration, PriceTick, TokenCreated, Trade
 from ..safety.filters import SafetyFilters
 from .curve import curve_progress, effective_buy_price
 from .market import MarketContext
@@ -18,6 +18,9 @@ from .wallets import WalletIntel
 
 log = logging.getLogger(__name__)
 STATE_TTL_S = 7200
+AMM_FRESH_S = 60          # après migration, prix d'entrée = prix PumpSwap observé il y a moins de 60 s
+AMM_WAIT_S = 180          # sinon on retente toutes les 10 s pendant 3 min (indexation DexScreener), puis on s'abstient
+AMM_DEFAULT_POOL_SOL = 80.0
 
 
 class ClaudeFeature:
@@ -91,6 +94,13 @@ class FeatureEngine:
                 self._pumped.add(ev.mint)
                 self.market.on_pump(ev.ts, tokenize_name(st.created.name, st.created.symbol), mult)
             return []
+        if isinstance(ev, PriceTick):
+            st = self.states.get(ev.mint)
+            if st is not None and ev.price > 0 and math.isfinite(ev.price) and ev.source in ("pumpswap", "dexscreener"):
+                st.amm_price, st.amm_ts = ev.price, ev.ts
+                if ev.pool_sol:
+                    st.amm_pool_sol = ev.pool_sol
+            return []
         if isinstance(ev, Migration):
             self.market.on_migration(ev.ts)
             st = self.states.get(ev.mint)
@@ -134,6 +144,16 @@ class FeatureEngine:
     def make_decision(self, st: TokenState, point: str, now: float) -> Decision | None:
         if point in st.emitted_points:
             return None
+        if st.migrated_ts is not None and st.migrated_ts <= now and not (
+                st.amm_ts is not None and now - st.amm_ts <= AMM_FRESH_S):
+            # Token déjà migré : le prix de la courbe est périmé. Sans prix PumpSwap récent, pas
+            # de prix d'entrée honnête → on attend un relevé, puis on s'abstient.
+            due = st.migrated_ts + 3 if point == "migration" else st.t0 + float(point)
+            if now - due < AMM_WAIT_S:
+                heapq.heappush(self.heap, (now + 10, st.mint, point))
+                return None
+            st.emitted_points.add(point)
+            return None
         st.emitted_points.add(point)
         last = st.last()
         if last is None:
@@ -151,14 +171,22 @@ class FeatureEngine:
                 versions[fid] = cf.version
         feats["enriched"] = 1.0 if st.mint in self.candidates else 0.0
         res = self.safety.check(feats)
-        fee = self.amm_fee_bps if st.migrated_ts else self.fee_bps
-        entry = effective_buy_price(last.v_sol, last.v_tokens, self.ref_sol, fee)
-        if not math.isfinite(entry) or entry <= 0 or not math.isfinite(last.price) or last.price <= 0:
+        if st.migrated_ts is not None and st.migrated_ts <= now:
+            # après migration : prix et profondeur du pool PumpSwap (frais AMM)
+            spot = st.amm_price
+            v_sol = st.amm_pool_sol or AMM_DEFAULT_POOL_SOL
+            v_tokens = v_sol / spot
+            entry = effective_buy_price(v_sol, v_tokens, self.ref_sol, self.amm_fee_bps)
+            mc_sol = spot * 1e9
+        else:
+            spot, v_sol, v_tokens, mc_sol = last.price, last.v_sol, last.v_tokens, last.mc_sol
+            entry = effective_buy_price(v_sol, v_tokens, self.ref_sol, self.fee_bps)
+        if not math.isfinite(entry) or entry <= 0 or not math.isfinite(spot) or spot <= 0:
             return None           # pas de prix d'entrée valide : rien à prédire
         return Decision(
             decision_id=f"{st.mint}:{point}", mint=st.mint, point=point, ts=now, features=feats,
-            entry_price=entry, spot_price=last.price, mc_sol=last.mc_sol, v_sol=last.v_sol,
-            v_tokens=last.v_tokens, safety_flags=list(res.flags), blocked=res.blocked,
+            entry_price=entry, spot_price=spot, mc_sol=mc_sol, v_sol=v_sol,
+            v_tokens=v_tokens, safety_flags=list(res.flags), blocked=res.blocked,
             feature_versions=versions,
             meta={"name": st.created.name, "symbol": st.created.symbol, "creator": st.created.creator,
                   "t0": st.t0, "migrated": st.migrated_ts is not None},

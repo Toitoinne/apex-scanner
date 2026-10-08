@@ -136,7 +136,7 @@ class LabelerService:
         async with httpx.AsyncClient(timeout=10) as client:
             while True:
                 await asyncio.sleep(poll)
-                mints = sorted(self.engine.migrated_mints())
+                mints = sorted(self.engine.migrated_mints(time.time()))
                 # pools à écouter en direct par l'ingestor (trades PumpSwap)
                 await self.bus.set_json("apex:pools:active",
                                         [{"pool": self.pools[m], "mint": m} for m in mints if m in self.pools][:200])
@@ -195,7 +195,7 @@ class LabelerService:
                 "tracked": len(self.engine.tracks), "pending": len(self.engine.heap),
                 "open_positions": sum(1 for p in self.engine.positions.values() if not p.state.closed),
                 "simulated_decisions": sum(len(t.sims) for t in self.engine.tracks.values()),
-                "pricefeed": self._feed_stats, "migrated_followed": len(self.engine.migrated_mints())})
+                "pricefeed": self._feed_stats, "migrated_followed": len(self.engine.migrated_mints(time.time()))})
 
     # ------------------------------------------------------------------
     async def rebuild(self) -> None:

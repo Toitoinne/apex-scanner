@@ -66,6 +66,9 @@ class TokenState:
     peak_price: float = 0.0
     max_dd: float = 0.0
     migrated_ts: float | None = None
+    amm_price: float | None = None        # dernier prix PumpSwap/DexScreener (après migration)
+    amm_ts: float | None = None
+    amm_pool_sol: float | None = None
     mint_authority: float | None = None   # 1 actif, 0 révoqué, None inconnu
     freeze_authority: float | None = None
     emitted_points: set[str] = field(default_factory=set)

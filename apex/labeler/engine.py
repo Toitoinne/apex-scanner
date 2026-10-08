@@ -20,6 +20,7 @@ from ..trading.pricefilter import PriceGuard
 from .labels import outcome, simulated_trade
 
 OUT = "__OUTCOME__"
+FRESH_MIGRATION_S = 900
 REACH = (("x2", 1.0), ("x5", 4.0), ("x10", 9.0), ("x20", 19.0))
 
 
@@ -44,6 +45,7 @@ class Track:
     closed_emitted: bool = False
     peak_price: float = 0.0
     migrated: bool = False
+    migrated_ts: float = 0.0
     any_rug: bool = False
     any_winner: bool = False
     danger: DangerDetector | None = None
@@ -129,6 +131,7 @@ class LabelerEngine:
             tr = self.tracks.get(ev.mint)
             if tr:
                 tr.migrated = True
+                tr.migrated_ts = tr.migrated_ts or ev.ts
         elif isinstance(ev, Decision):
             self.on_decision(ev)
 
@@ -273,9 +276,11 @@ class LabelerEngine:
                 del self.tracks[mint]
         return closed, finals
 
-    def migrated_mints(self) -> set[str]:
-        """Tokens dont le prix doit venir de PumpSwap (migrés et encore utiles)."""
-        out = {m for m, tr in self.tracks.items() if tr.migrated and (tr.pending > 0)}
+    def migrated_mints(self, now: float | None = None) -> set[str]:
+        """Tokens dont le prix doit venir de PumpSwap (migrés et encore utiles). Un token migré depuis
+        moins de 15 min est suivi même sans décision : ses décisions attendent un prix PumpSwap."""
+        out = {m for m, tr in self.tracks.items() if tr.migrated and (
+            tr.pending > 0 or (now is not None and now - tr.migrated_ts < FRESH_MIGRATION_S))}
         out |= {p.mint for p in self.positions.values() if not p.state.closed
                 and (self.tracks.get(p.mint) is None or self.tracks[p.mint].migrated)}
         return out
