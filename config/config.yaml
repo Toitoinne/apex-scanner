@@ -242,8 +242,8 @@ claude:
   sandbox_timeout_s: 10
 
 reports:
-  every_s: 21600
-  daily_hour_utc: 7
+  every_s: 21600                  # rapport technique (commande /tech)
+  bulletin_hours_paris: [9, 15, 21]   # bulletins en langage simple ; celui de 9 h = bilan 24 h
 
 backfill:
   provider: none                 # none = démarrage à froid gratuit ; dune = backfill (crédits Dune)

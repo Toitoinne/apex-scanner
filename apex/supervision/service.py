@@ -21,6 +21,7 @@ from typing import Any
 from .. import bus as B
 from ..config import Config, secrets
 from ..db import DB
+from ..reporting import bulletin as BU
 from ..reporting.reports import Reporter
 from .corrections import Plan, build_plan, candidates_for
 from .detector import ABNORMAL, Detected, Detector
@@ -46,6 +47,7 @@ class Supervisor:
         self.reporter = Reporter(db, bus, cfg, self.meta)
         self._last_strong_alert = 0.0
         self._last_outage: dict[str, float] = {}
+        self._down: set[str] = set()
 
     # ------------------------------------------------------------------
     async def send(self, cmd: dict, timeout: float = 120) -> dict:
@@ -143,14 +145,23 @@ class Supervisor:
         ref = await self.db.fetchval("SELECT value FROM reference_curves WHERE curve='error_rate'")
         cur = await self.db.fetchval(
             "SELECT value FROM curve_points WHERE curve='error_rate' AND win='1h' ORDER BY ts DESC LIMIT 1")
-        if ref and cur and cur > ref * self.s["strong_regression_ratio"] and time.time() - self._last_strong_alert > 3600:
+        if ref and cur and cur > ref * self.s["strong_regression_ratio"] and time.time() - self._last_strong_alert > 6 * 3600:
             self._last_strong_alert = time.time()
-            await self.notify_now(f"⚠️ Régression forte : taux d'erreur 1 h = {cur:.1%} (référence {ref:.1%})")
+            await self.notify_now(
+                f"📉 Le bot se trompe plus que d'habitude depuis 1 h ({cur:.1%} d'erreurs contre {ref:.1%} en temps normal). "
+                "C'est souvent lié au marché (activité inhabituelle). Il s'ajuste tout seul : rien à faire de ton côté.")
         hb = await self.bus.heartbeats()
         for svc, t in hb.items():
+            name = BU.SERVICE_TXT.get(svc, svc)
             if time.time() - t > 120 and time.time() - self._last_outage.get(svc, 0) > 3600:
                 self._last_outage[svc] = time.time()
-                await self.notify_now(f"🔴 Panne probable : le service {svc} ne répond plus depuis {int(time.time() - t)} s")
+                self._down.add(svc)
+                await self.notify_now(
+                    f"🔴 Panne : {name} ne répond plus depuis {int((time.time() - t) / 60) or 1} min. "
+                    "Le serveur le relance normalement tout seul ; je te préviens dès que ça repart.")
+            elif time.time() - t <= 60 and svc in self._down:
+                self._down.discard(svc)
+                await self.notify_now(f"✅ Réparé : {name} fonctionne de nouveau.")
         # dégel automatique
         for r in await self.db.fetch("SELECT component FROM frozen_components WHERE since < now() - make_interval(hours => $1)", UNFREEZE_AFTER_H):
             await self.db.execute("DELETE FROM frozen_components WHERE component=$1", r["component"])
@@ -181,7 +192,8 @@ class Supervisor:
         await self.bus.set_json("apex:learning:health", health)
         if problems and now - getattr(self, "_last_health_alert", 0) > 3600:
             self._last_health_alert = now
-            await self.notify_now("🧠 <b>Alerte apprentissage</b> : " + " ; ".join(problems))
+            await self.notify_now("🧠 <b>L'apprentissage a un souci</b> : " + " ; ".join(problems)
+                                  + "\nLe bot tente de se corriger seul, et le suivi Claude Code vérifiera à son prochain passage.")
         return [f"santé de l'apprentissage : {p}" for p in problems]
 
     async def trading_gate(self) -> list[str]:
@@ -262,6 +274,24 @@ class Supervisor:
         if since_v is not None and new != R.SUSPENDED:
             extra = "\n(reprise prouvée sur les positions postérieures à la suspension)"
         return f"{head}\n\n<b>Critères</b> ({s.n} positions, {s.days:.1f} j)\n{crit}{extra}"
+
+    async def bulletin_if_due(self) -> None:
+        """Bulletin en langage simple à heures fixes (heure de Paris) ; un seul par créneau, même après redémarrage."""
+        local = BU.paris_now()
+        hours = sorted(self.cfg.get("reports.bulletin_hours_paris") or [9, 15, 21])
+        if local.hour not in hours:
+            return
+        slot = local.strftime("%Y-%m-%d-%H")
+        old = await self.bus.r.set("apex:bulletin:last", slot, get=True)
+        if old == slot.encode():
+            return
+        daily = local.hour == hours[0]
+        prev = [h for h in hours if h < local.hour]
+        span = 24 if daily else local.hour - prev[-1]
+        title = "bilan des dernières 24 h" if daily else f"point de {local.hour} h"
+        text = BU.render(await BU.gather(self.db, self.bus, self.cfg, span), title)
+        await self.bus.publish(B.NOTIFY, {"type": "report", "text": text})
+        await self.db.log_event("info", "report", f"bulletin {slot} envoyé")
 
     async def notify_now(self, text: str) -> None:
         await self.bus.publish(B.NOTIFY, {"type": "urgent", "text": text})
@@ -368,8 +398,9 @@ class Supervisor:
                 component, problem_key, f"{n} corrections successives en échec")
             ok = await self.rollback_stable(f"gel de {component}")
             await self.notify_now(
-                f"🧊 Gel des corrections sur « {component} » : {n} corrections successives ont échoué sur {problem_key}. "
-                f"Retour au dernier état stable : {'oui' if ok else 'aucun snapshot stable'}. Dégel automatique dans {UNFREEZE_AFTER_H} h.")
+                f"🧊 Le bot a essayé {n} corrections d'affilée sur un même point sans succès : il fait une pause sur ce "
+                f"point{' et revient à sa dernière version stable' if ok else ''}, et réessaiera dans {UNFREEZE_AFTER_H} h. "
+                f"Rien à faire de ton côté. (détail technique : {component}, {problem_key})")
 
     # ------------------------------------------------------------------
     async def correct(self, states: list[Detected], snap: dict) -> list[str]:
@@ -512,8 +543,7 @@ class Supervisor:
         last_db = await self.db.fetchval("SELECT extract(epoch from max(ts)) FROM claude_proposals")
         last_claude = float(last_db) if last_db else time.time() - self.cfg.get("claude.cycle_s")
         last_claude_check = 0.0
-        last_report = time.time()
-        last_daily_day = None
+        last_report = 0.0
         while True:
             try:
                 await self.cycle()
@@ -532,13 +562,11 @@ class Supervisor:
                          if s["curve"] == "error_rate:AUTRE" and s["state"] in ("REGRESSION", "REGRESSION_TYPE")]
                 if autre:
                     B.spawn(self.improver.run(trigger="AUTRE_EN_HAUSSE", problem_type="error_rate:AUTRE", diagnosis={}, supervisor=self))
+            # rapport technique : gardé pour /tech (plus envoyé d'office)
             if now - last_report >= self.cfg.get("reports.every_s"):
-                await self.reporter.periodic(hours=6)
+                await self.bus.r.set("apex:report:tech", await self.reporter.build(6))
                 last_report = now
-            utc = dt.datetime.now(dt.timezone.utc)
-            if utc.hour == self.cfg.get("reports.daily_hour_utc") and last_daily_day != utc.date():
-                await self.reporter.periodic(hours=24, daily=True)
-                last_daily_day = utc.date()
+            await self.bulletin_if_due()
             await asyncio.sleep(self.s["cycle_s"])
 
 

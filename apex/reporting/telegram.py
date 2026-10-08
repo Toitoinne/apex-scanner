@@ -15,46 +15,42 @@ from .. import bus as B
 from ..config import Config, secrets
 from ..db import DB
 from ..errors.classifier import DISPLAY
+from . import bulletin as BU
 
 log = logging.getLogger("notifier")
 GROUP = "notifier"
 
 
 def e(x) -> str:
-    return html.escape(str(x))
+    return html.escape(str(x), quote=False)
 
 
 def fmt_alert(a: dict) -> str:
+    """Alerte token, en langage simple (le détail technique reste dans la dernière ligne)."""
     sol_usd = a.get("sol_price_usd") or 0
     mc = a["mc_sol"]
-    mc_txt = f"{mc:,.0f} SOL" + (f" (~${mc * sol_usd:,.0f})" if sol_usd else "")
-    reasons = "\n".join(f"  • {e(r['feature'])} = {r['value']} (+{r['contribution']})" for r in a.get("reasons", [])) or "  • n/d"
-    flags = ", ".join(a.get("flags", [])) or "aucun"
-    slip = " · ".join(f"{k} SOL : {v:.1%}" for k, v in a.get("slippage", {}).items())
-    hz = " · ".join(f"{k} {v:.1%}" for k, v in a.get("horizons", {}).items())
+    mc_txt = f"{mc:,.0f} SOL".replace(",", " ") + (f" (~{mc * sol_usd:,.0f} $)".replace(",", " ") if sol_usd else "")
     sc = a.get("scores", {})
     m = a["mint"]
-    why = ("proba de x10 en 24 h" if a.get("score") == "x10" else "proba de x2 en 1 h")
-    arm_txt = (f"{a.get('arm_mean_pnl', 0):+.0%} en moyenne sur {a.get('arm_n', 0):.0f} cas simulés"
-               if a.get("arm_n") else "en cours d'apprentissage")
-    point = "migration" if a["point"] == "migration" else f"T+{int(a['point'])} s"
+    when = ("juste après sa migration sur PumpSwap" if a["point"] == "migration"
+            else f"{int(a['point'])} s après son lancement")
+    why = [BU.FEATURE_TXT[r["feature"]] for r in a.get("reasons", [])
+           if r.get("contribution", 0) > 0 and r["feature"] in BU.FEATURE_TXT][:3]
+    flags = a.get("flags", [])
+    arm_txt = (f"ce type d'alerte a rapporté {a.get('arm_mean_pnl', 0):+.0%} en moyenne sur {a.get('arm_n', 0):.0f} cas simulés"
+               if a.get("arm_n") else "il apprend encore quel plan marche le mieux")
     return (
-        f"🚀 <b>{e(a.get('name'))}</b> (${e(a.get('symbol'))})\n"
-        f"<code>{e(m)}</code>\n"
-        f"Point : {point} · MC : {mc_txt}\n"
-        f"<b>x2 en 1 h : {sc.get('x2', a['p']):.0%}</b> · x5 en 6 h : {a.get('horizons', {}).get('X5_6H', 0):.1%}"
-        f" · <b>x10 en 24 h : {sc.get('x10', 0):.1%}</b>\n"
-        f"Déclenchée sur : {why}\n"
-        f"🎯 <b>Stratégie de sortie</b> : {e(a.get('policy_description', a.get('policy', '')))}\n"
-        f"   (cette combinaison rapporte {arm_txt} — je t'enverrai les signaux de vente ici)\n"
-        f"Horizons : {hz}\n"
-        f"Modèle champion : <code>{e(a['model'])}</code> · bras {e(a.get('arm'))}\n"
-        f"Raisons :\n{reasons}\n"
-        f"Drapeaux : {e(flags)}\n"
-        f"Slippage estimé : {slip}\n"
-        f"<a href=\"https://dexscreener.com/solana/{m}\">DexScreener</a> · "
-        f"<a href=\"https://solscan.io/token/{m}\">Solscan</a> · "
-        f"<a href=\"https://pump.fun/coin/{m}\">pump.fun</a>"
+        f"🚀 <b>Alerte : {e(a.get('name'))}</b> (${e(a.get('symbol'))})\n"
+        f"Le bot pense que ce token peut monter. <i>Simulation : aucun achat réel.</i>\n\n"
+        f"📊 Chances estimées : <b>x2 en 1 h : {sc.get('x2', a['p']):.0%}</b> · x10 en 24 h : {sc.get('x10', 0):.1%}\n"
+        f"⏱ Repéré {when} · valeur totale : {mc_txt}\n"
+        + (f"💡 Pourquoi : {e(' ; '.join(why))}\n" if why else "")
+        + (f"⚠️ Vigilance : {e(', '.join(flags))}\n" if flags else "")
+        + f"🎯 Plan de sortie : {e(a.get('policy_description', a.get('policy', '')))}\n"
+        f"   ({arm_txt} ; je te dirai ici quand il revendrait)\n\n"
+        f"<a href=\"https://dexscreener.com/solana/{m}\">Graphique</a> · "
+        f"<a href=\"https://pump.fun/coin/{m}\">pump.fun</a>\n"
+        f"<code>{e(m)}</code>"
     )
 
 
@@ -65,13 +61,14 @@ class Telegram:
         self.client = httpx.AsyncClient(timeout=40)
         self._last_send = 0.0
 
-    async def send(self, text: str, reply_to: int | None = None) -> int | None:
+    async def send(self, text: str, reply_to: int | None = None, silent: bool = False) -> int | None:
         msg_id = None
         for chunk in [text[i:i + 3900] for i in range(0, len(text), 3900)] or [""]:
             wait = 1.05 - (time.time() - self._last_send)
             if wait > 0:
                 await asyncio.sleep(wait)
-            payload = {"chat_id": self.chat_id, "text": chunk, "parse_mode": "HTML", "disable_web_page_preview": True}
+            payload = {"chat_id": self.chat_id, "text": chunk, "parse_mode": "HTML", "disable_web_page_preview": True,
+                       "disable_notification": silent}
             if reply_to:
                 payload["reply_to_message_id"] = reply_to
             try:
@@ -98,11 +95,12 @@ class Notifier:
         s = secrets()
         self.tg = Telegram(s.telegram_bot_token, s.telegram_chat_id) if s.telegram_bot_token else None
 
-    async def out(self, text: str, reply_to: int | None = None) -> int | None:
+    async def out(self, text: str, reply_to: int | None = None, silent: bool = False) -> int | None:
+        """silent : message sans sonnerie (suivis d'alertes, signaux simulés) pour ne pas noyer l'essentiel."""
         if self.tg is None:
             log.info("[telegram désactivé] %s", text[:300])
             return None
-        return await self.tg.send(text, reply_to)
+        return await self.tg.send(text, reply_to, silent)
 
     async def consume(self) -> None:
         async for stream, mid, ev in self.bus.consume([B.ALERTS, B.NOTIFY], GROUP, "notifier-1", count=50):
@@ -123,13 +121,14 @@ class Notifier:
 
     async def followup(self, ev: dict) -> None:
         row = await self.db.fetchrow("SELECT tg_message_id FROM alerts WHERE decision_id=$1", ev["decision_id"])
-        label = "+15 min" if ev.get("horizon") == "L15" else "+60 min"
-        ok = "✅" if ev.get("y") else "❌"
+        label = "15 min" if ev.get("horizon") == "L15" else "1 h"
+        ok = "✅ Bien vu" if ev.get("y") else "❌ Raté"
         et = ev.get("error_type")
-        txt = (f"{ok} Suivi {label} : PnL simulé {ev['pnl']:+.0%} · rendement max {ev.get('max_return', 0):+.0%}"
-               + (f" · erreur : {DISPLAY.get(et, et)}" if et else "")
-               + (" · ⚠ données incomplètes (coupure du flux)" if ev.get("incomplete") else ""))
-        await self.out(txt, reply_to=row["tg_message_id"] if row else None)
+        txt = (f"{ok} — {label} après l'alerte : au plus haut {ev.get('max_return', 0):+.0%}, "
+               f"trade simulé {ev['pnl']:+.0%}"
+               + (f"\nCe qu'il en retient : {BU.ERROR_TXT.get(et, DISPLAY.get(et, et))}" if et else "")
+               + ("\n(données incomplètes : coupure du flux pendant le suivi)" if ev.get("incomplete") else ""))
+        await self.out(txt, reply_to=row["tg_message_id"] if row else None, silent=True)
 
     async def sell_signal(self, ev: dict) -> None:
         """Signal de vente en réponse à l'alerte d'origine."""
@@ -150,7 +149,8 @@ class Notifier:
         txt = (f"{head}\n${sym} : prix actuel = x{mult:.2f} ton entrée\n"
                f"Position : {pnl:+.0%}" + (" (clôturée)" if ev["closed"] else " (le reste continue de courir)")
                + f"\nPaper trading ({ev.get('notional_sol', 0.1):g} SOL) : {pnl * ev.get('notional_sol', 0.1):+.3f} SOL")
-        await self.out(txt, reply_to=row["tg_message_id"] if row else None)
+        await self.out(txt + "\n<i>(simulation : aucune vente réelle)</i>", reply_to=row["tg_message_id"] if row else None,
+                       silent=True)
 
     # ---------------- commandes ----------------
     async def commands(self) -> None:
@@ -174,6 +174,13 @@ class Notifier:
     async def handle(self, cmd: str) -> str:
         db, primary = self.db, self.cfg["labels"]["primary"]
         st = await self.bus.get_json("apex:learner:state", {}) or {}
+        if cmd in ("/aide", "/help", "/start", "/lexique"):
+            return BU.GLOSSAIRE
+        if cmd == "/bilan":
+            return BU.render(await BU.gather(db, self.bus, self.cfg, 6, record=False), "point à la demande")
+        if cmd == "/tech":
+            t = await self.bus.r.get("apex:report:tech")
+            return t.decode() if t else "Rapport technique pas encore prêt (il est calculé toutes les 6 h)."
         if cmd == "/top":
             rows = await db.fetch(
                 """SELECT DISTINCT ON (p.mint) p.mint, p.point, p.p_cal, t.name, t.symbol FROM predictions p JOIN tokens t USING (mint)
@@ -304,8 +311,9 @@ class Notifier:
         if cmd in ("/pause", "/reprendre"):
             await self.bus.publish(B.CONTROL, {"op": "pause", "value": cmd == "/pause", "cmd_id": uuid.uuid4().hex})
             return "⏸ Alertes en pause (l'apprentissage continue)." if cmd == "/pause" else "▶️ Alertes reprises."
-        return ("Commandes : /trading /ordres /paper /stats /top /seuil /erreurs /etat /corrections /model /features "
-                "/pause /reprendre · trading réel : /activer /stop")
+        return ("Commandes simples : /bilan (le point maintenant) · /trading (avant l'argent réel) · /paper (trades simulés) "
+                "· /aide (lexique)\nTechniques : /tech /stats /top /seuil /erreurs /etat /corrections /model /features /ordres\n"
+                "Alertes : /pause /reprendre · trading réel : /activer /stop")
 
     @staticmethod
     def _flow_status(ing: dict, st: dict) -> str:
