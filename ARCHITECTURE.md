@@ -205,3 +205,7 @@ exactement ce que coûterait un passage du flux sur Helius.
 Les événements portent un champ `chain` ; il suffit d'ajouter un adaptateur d'ingestion
 (logs EVM du contrat four.meme) et les constantes de courbe correspondantes. Le reste de
 la chaîne (features génériques, labels, boucles 1–3) est indépendant de la chaîne.
+
+## Mises à jour
+
+Toute modification passe par `deploy/safe_deploy.sh` : zones protégées, tests dans une image candidate, contrôle de santé de 4 min et retour automatique à la version précédente en cas de problème.
