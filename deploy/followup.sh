@@ -98,11 +98,12 @@ PYEOF
   docker stats --no-stream --format "{{.Name}} {{.CPUPerc}} {{.MemUsage}}"
   ;;
 notify)
+  TEXT="$(head -c 3500)"   # à lire AVANT tout appel docker (sinon « docker compose exec » avale l'entrée)
+  [ -n "$TEXT" ] || { echo "message vide"; exit 2; }
   KEY="apex:followup:sent:$(date -u +%Y%m%d)"
-  N=$(docker compose exec -T redis redis-cli incr "$KEY" | tr -d '\r')
-  docker compose exec -T redis redis-cli expire "$KEY" 172800 >/dev/null
+  N=$(docker compose exec -T redis redis-cli incr "$KEY" </dev/null | tr -d '\r')
+  docker compose exec -T redis redis-cli expire "$KEY" 172800 </dev/null >/dev/null
   if [ "${N:-99}" -gt 8 ]; then echo "limite quotidienne de messages atteinte"; exit 0; fi
-  TEXT="$(head -c 3500)"
   envval() { grep -E "^$1=" /opt/apex/.env | head -1 | cut -d= -f2- | tr -d '\r'; }
   TELEGRAM_BOT_TOKEN="$(envval TELEGRAM_BOT_TOKEN)"; TELEGRAM_CHAT_ID="$(envval TELEGRAM_CHAT_ID)"
   curl -s -o /dev/null -w "%{http_code}\n" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
