@@ -7,7 +7,7 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY apex ./apex
-RUN pip install .
+RUN pip install ".[dev]"
 
 COPY sql ./sql
 COPY tests ./tests

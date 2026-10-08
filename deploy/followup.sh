@@ -6,8 +6,19 @@
 set -euo pipefail
 cd /opt/apex
 MODE="${SSH_ORIGINAL_COMMAND:-report}"
+ARG="${MODE#* }"; [ "$ARG" = "$MODE" ] && ARG=""
+MODE="${MODE%% *}"
 
 case "$MODE" in
+deploy)
+  # déploiement d'une branche/commit du dépôt GitHub, avec tous les contrôles (voir safe_deploy.sh)
+  exec /opt/apex/deploy/safe_deploy.sh "$ARG"
+  ;;
+logs)
+  case "$ARG" in ingestor|features|labeler|learner|supervisor|notifier|dashboard|trader) ;;
+    *) echo "service inconnu"; exit 2 ;; esac
+  docker compose logs --no-color --since 6h --tail 200 "$ARG" 2>&1
+  ;;
 report)
   docker compose exec -T supervisor python - <<'PYEOF'
 import asyncio, json, time
@@ -77,6 +88,10 @@ PYEOF
   done
   echo "### dernières erreurs"
   docker compose logs --no-color --since 6h 2>&1 | grep -E "Error|ERROR" | grep -v Timescale | tail -8 || true
+  echo "### version en production"
+  git -C /opt/apex log -1 --format="%h %ci %s" 2>/dev/null || true
+  echo "### derniers déploiements"
+  tail -6 /var/log/apex-deploys.log 2>/dev/null || echo "aucun"
   echo "### ressources"
   free -h | head -2; df -h / | tail -1
   docker stats --no-stream --format "{{.Name}} {{.CPUPerc}} {{.MemUsage}}"
@@ -95,5 +110,5 @@ notify)
 ${TEXT}"
   ;;
 *)
-  echo "commande non autorisée (report | notify)"; exit 1 ;;
+  echo "commande non autorisée (report | notify | logs <service> | deploy <branche>)"; exit 1 ;;
 esac
