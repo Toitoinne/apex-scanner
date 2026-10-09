@@ -183,6 +183,14 @@ def render(d: dict, title: str) -> str:
             trend = "↗ en progrès" if delta > 0.01 else ("↘ en léger recul" if delta < -0.01 else "→ stable")
             txt += f" (hier {prev:.0%}, {trend})"
         lines.append(txt)
+    ex = d.get("exit_model") or {}
+    if ex.get("situations_apprises"):
+        if ex.get("pret") and ex.get("fiabilite") is not None:
+            lines.append(f"• Quand revendre : {n_fr(ex['situations_apprises'])} situations étudiées, il se trompe "
+                         f"{ex['fiabilite']:.0%} moins qu'au hasard pour savoir si la hausse va continuer")
+        else:
+            lines.append(f"• Quand revendre : en apprentissage ({n_fr(ex['situations_apprises'])} situations étudiées, "
+                         "il commence à décider seul à partir de 2 000)")
     errs = d.get("errors") or []
     if errs:
         top = errs[0]
@@ -242,6 +250,7 @@ async def gather(db: Any, bus: Any, cfg: Any, hours: int, record: bool = True) -
     d["skill_prev"] = await skill_history(bus, d["skill"] if record else None)
     d["trading"] = await bus.get_json("apex:trading:status", {}) or {}
     d["criteria"] = cfg.get("trading.criteria") or {}
+    d["exit_model"] = ((await bus.get_json("apex:labeler:stats", {}) or {}).get("sortie_apprise") or {})
     d["problems"] = await health_problems(bus)
     return d
 

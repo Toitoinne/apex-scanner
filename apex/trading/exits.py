@@ -26,18 +26,22 @@ class Policy:
     danger_exit: bool = True
     time_limit_s: float = 86400
     description: str = ""
+    learned_exit: bool = False                        # vend quand le modèle de sortie juge la hausse finie
+    hold_threshold: float = 0.35                      # … c.-à-d. quand P(nouvelle hausse) < ce seuil
+    min_hold_s: float = 30                            # jamais avant ce délai après l'achat
 
     @classmethod
     def from_cfg(cls, name: str, c: dict) -> "Policy":
         return cls(name=name, stop_loss=c["stop_loss"], take_profits=tuple(tuple(x) for x in c.get("take_profits", [])),
                    trail=c.get("trail"), trail_activate=c.get("trail_activate", 1.0e9),
                    danger_exit=c.get("danger_exit", True), time_limit_s=c.get("time_limit_s", 86400),
-                   description=c.get("description", ""))
+                   description=c.get("description", ""), learned_exit=c.get("learned_exit", False),
+                   hold_threshold=c.get("hold_threshold", 0.35), min_hold_s=c.get("min_hold_s", 30))
 
 
 @dataclass
 class Action:
-    kind: str            # PALIER | STOP | STOP_SUIVEUR | DANGER | TEMPS
+    kind: str            # PALIER | STOP | STOP_SUIVEUR | DANGER | TEMPS | APPRIS
     t: float
     price: float
     fraction: float      # fraction de la position initiale vendue
@@ -75,7 +79,8 @@ class PolicyState:
             self.remaining = 0.0
             self.closed = True
 
-    def on_price(self, p: Policy, t: float, price: float, danger: str | None = None) -> list[Action]:
+    def on_price(self, p: Policy, t: float, price: float, danger: str | None = None,
+                 hold_p: float | None = None) -> list[Action]:
         if self.closed or price <= 0 or self.entry <= 0:
             return []
         out: list[Action] = []
@@ -106,6 +111,9 @@ class PolicyState:
                 act("STOP_SUIVEUR", self.remaining, f"−{p.trail:.0%} depuis x{self.peak / self.entry:.2f}")
         elif mult <= 1 - p.stop_loss:
             act("STOP", self.remaining)
+        if (not self.closed and p.learned_exit and hold_p is not None and t - self.t0 >= p.min_hold_s
+                and hold_p < p.hold_threshold):
+            act("APPRIS", self.remaining, f"chances de nouvelle hausse {hold_p:.0%}")
         return out
 
     def close_at_market(self, p: Policy, t: float) -> list[Action]:

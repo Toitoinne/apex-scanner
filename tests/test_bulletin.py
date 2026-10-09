@@ -62,3 +62,10 @@ def test_data_audit_verdict():
     assert verdict(good).startswith("✅") and "100 % des achats/ventes vus (787/787)" in verdict(good)
     assert verdict({**good, "completude_pct": 80.0}).startswith("⚠️")
     assert verdict({**good, "fraicheur_s": 120}).startswith("⚠️")
+
+
+def test_bulletin_mentions_exit_learning():
+    txt = BU.render(sample(exit_model={"situations_apprises": 450, "pret": False}), "point")
+    assert "Quand revendre : en apprentissage (450 situations" in txt
+    txt = BU.render(sample(exit_model={"situations_apprises": 5000, "pret": True, "fiabilite": 0.12}), "point")
+    assert "il se trompe 12% moins qu'au hasard" in txt

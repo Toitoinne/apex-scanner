@@ -70,6 +70,16 @@ exits:
                     description: "vendre 1/3 à x2, 1/3 à x5, le reste avec un stop suiveur −50 %"}
     MOONSHOT:      {stop_loss: 0.6, take_profits: [[3.0, 0.33], [10.0, 0.33]], trail: 0.50, trail_activate: 2.0, time_limit_s: 86400,
                     description: "viser les gros multiplicateurs : 1/3 à x3, 1/3 à x10, stop suiveur −50 % dès x2"}
+    # Sorties APPRISES : le modèle de sortie (exits.learned) estime à chaque instant si la hausse va continuer ;
+    # la position est vendue quand ses chances deviennent trop faibles. Garde-fous conservés (stop, danger).
+    SORTIE_APPRISE: {stop_loss: 0.5, take_profits: [[2.0, 0.5]], trail: 0.5, trail_activate: 2.0, time_limit_s: 86400,
+                     learned_exit: true, hold_threshold: 0.35, min_hold_s: 30,
+                     description: "récupérer la mise à x2, puis vendre le reste quand le bot juge la hausse finie"}
+    SORTIE_APPRISE_LIBRE: {stop_loss: 0.5, take_profits: [], trail: 0.5, trail_activate: 3.0, time_limit_s: 86400,
+                           learned_exit: true, hold_threshold: 0.35, min_hold_s: 30,
+                           description: "tout garder tant que le bot pense que ça monte, tout vendre quand il juge la hausse finie"}
+  # modèle de sortie : « le prix touchera-t-il +30 % avant −20 % dans les 10 min ? », appris en continu
+  learned: {up: 1.3, down: 0.8, horizon_s: 600, every_s: 10, min_samples: 2000}
 
 # Aptitude au trading réel : jugée UNIQUEMENT sur le paper trading (frais + slippage compris).
 trading:
@@ -190,7 +200,7 @@ bandit:
   scores:
     x2:  {horizon: L60,     thresholds: [0.03, 0.05, 0.07, 0.10, 0.13, 0.16, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.70]}
     x10: {horizon: X10_24H, thresholds: [0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12]}
-  policies: [TP2_SL50, RECUP_TRAIL40, RECUP_TRAIL25, ECHELLE, MOONSHOT]
+  policies: [TP2_SL50, RECUP_TRAIL40, RECUP_TRAIL25, ECHELLE, MOONSHOT, SORTIE_APPRISE, SORTIE_APPRISE_LIBRE]
   decision_points: ["10", "15", "30", "60", "120", "300", "600", "migration"]
   resample_every_s: 1800
   discount: 0.999                # oubli exponentiel des postérieurs

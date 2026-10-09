@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import heapq
 import logging
+import pickle
 import time
+from pathlib import Path
 
 import httpx
 
@@ -195,7 +197,10 @@ class LabelerService:
                 "tracked": len(self.engine.tracks), "pending": len(self.engine.heap),
                 "open_positions": sum(1 for p in self.engine.positions.values() if not p.state.closed),
                 "simulated_decisions": sum(len(t.sims) for t in self.engine.tracks.values()),
-                "pricefeed": self._feed_stats, "migrated_followed": len(self.engine.migrated_mints(time.time()))})
+                "pricefeed": self._feed_stats, "migrated_followed": len(self.engine.migrated_mints(time.time())),
+                "sortie_apprise": self.engine.exit_ml.summary()})
+            if time.time() - self._exit_saved > 600:
+                self.save_exit_model()
 
     # ------------------------------------------------------------------
     async def rebuild(self) -> None:
@@ -286,13 +291,48 @@ class LabelerService:
         self.engine.drain()          # résultats déjà publiés avant l'arrêt : non renvoyés
         return len(decs)
 
+    # ---------- modèle de sortie apprise : conservé entre les redémarrages ----------
+    _exit_saved = 0.0
+
+    def _exit_path(self) -> Path:
+        return Path(secrets().data_dir) / "exit_model.pkl"
+
+    def load_exit_model(self) -> None:
+        try:
+            with open(self._exit_path(), "rb") as f:
+                st = pickle.load(f)
+            ml = self.engine.exit_ml
+            ml.model, ml.n_learned, ml.n_pos = st["model"], st["n_learned"], st["n_pos"]
+            ml.ll_model, ml.ll_base, ml.n_eval = st["ll_model"], st["ll_base"], st["n_eval"]
+            log.info("modèle de sortie rechargé : %d situations apprises", ml.n_learned)
+        except FileNotFoundError:
+            pass
+        except Exception:  # noqa: BLE001
+            log.exception("modèle de sortie illisible : on repart de zéro")
+
+    def save_exit_model(self) -> None:
+        self._exit_saved = time.time()
+        ml = self.engine.exit_ml
+        try:
+            tmp = self._exit_path().with_suffix(".tmp")
+            tmp.parent.mkdir(parents=True, exist_ok=True)
+            with open(tmp, "wb") as f:
+                pickle.dump({"model": ml.model, "n_learned": ml.n_learned, "n_pos": ml.n_pos, "ll_model": ml.ll_model,
+                             "ll_base": ml.ll_base, "n_eval": ml.n_eval}, f)
+            tmp.replace(self._exit_path())
+        except Exception:  # noqa: BLE001
+            log.exception("sauvegarde du modèle de sortie")
+
     async def run(self) -> None:
+        self.load_exit_model()
         # signal de vie pendant la reprise (sinon le contrôle de santé croit le labeler en panne)
         hb = asyncio.create_task(B.heartbeat_loop(self.bus, "labeler"))
+        self.engine.exit_ml.learn = False      # la reprise rejoue le passé : déjà appris avant l'arrêt
         try:
             await self.rebuild()
         finally:
             hb.cancel()
+            self.engine.exit_ml.learn = True
         await asyncio.gather(
             B.resilient("consume", lambda first: self.consume(first)),
             B.resilient("tick", lambda _: self.tick_loop()),

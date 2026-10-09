@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..events import Decision, Label, Migration, Outcome, PriceTick, TokenCreated, Trade
+from ..trading.exit_model import ExitLearner, ExitTrackState
 from ..trading.exits import DangerDetector, Policy, PolicyState
 from ..trading.pricefilter import PriceGuard
 from .labels import outcome, simulated_trade
@@ -50,6 +51,7 @@ class Track:
     any_winner: bool = False
     danger: DangerDetector | None = None
     sims: dict[str, dict[str, PolicyState]] = field(default_factory=dict)   # decision_id -> stratégie -> état
+    exit: ExitTrackState = field(default_factory=ExitTrackState)            # sortie apprise (points de contrôle)
 
     def path_after(self, t: float, until: float) -> list[tuple[float, float]]:
         i = bisect.bisect_right(self.times, t)
@@ -89,6 +91,7 @@ class LabelerEngine:
         self.outcomes: list[Outcome] = []              # outcomes prêts (stratégies toutes clôturées)
         self._last_closure = 0.0
         self.guard = PriceGuard(cfg.get("pricefeed", {}).get("max_jump", 5.0))
+        self.exit_ml = ExitLearner(ex.get("learned", {}))
 
     # ------------------------------------------------------------------
     def on_event(self, ev: Any) -> None:
@@ -112,8 +115,11 @@ class LabelerEngine:
                         fl[2] -= ev.tokens
                     fl[4] = ev.ts
                 danger = tr.danger.on_trade(t, ev.trader, ev.is_buy, ev.sol, ev.tokens, ev.price) if tr.danger else None
-                self._update_sims(tr, t, ev.price, danger)
-            self._update_positions(ev.mint, ev.ts, ev.price, danger)
+                hold_p = self._exit_signal(tr, t, ev.price)
+                self._update_sims(tr, t, ev.price, danger, hold_p)
+            else:
+                hold_p = None
+            self._update_positions(ev.mint, ev.ts, ev.price, danger, hold_p)
         elif isinstance(ev, PriceTick):
             tr = self.tracks.get(ev.mint)
             if tr is not None and tr.prices:
@@ -125,8 +131,11 @@ class LabelerEngine:
                 t = self._append(tr, ev.ts, ev.price)
                 if ev.trader and tr.danger is not None:     # trade PumpSwap : signaux de danger après migration
                     danger = tr.danger.on_trade(t, ev.trader, bool(ev.is_buy), ev.sol or 0.0, ev.tokens or 0.0, ev.price)
-                self._update_sims(tr, t, ev.price, danger)
-            self._update_positions(ev.mint, ev.ts, ev.price, danger)
+                hold_p = self._exit_signal(tr, t, ev.price)
+                self._update_sims(tr, t, ev.price, danger, hold_p)
+            else:
+                hold_p = None
+            self._update_positions(ev.mint, ev.ts, ev.price, danger, hold_p)
         elif isinstance(ev, Migration):
             tr = self.tracks.get(ev.mint)
             if tr:
@@ -143,22 +152,29 @@ class LabelerEngine:
         tr.peak_price = max(tr.peak_price, price)
         return t
 
-    def _update_sims(self, tr: Track, t: float, price: float, danger: str | None) -> None:
+    def _exit_signal(self, tr: Track, t: float, price: float) -> float | None:
+        """Sortie apprise : seulement pour les tokens où une position (simulée ou réelle) est ouverte."""
+        if not tr.sims and not any(p.mint == tr.created.mint and not p.state.closed for p in self.positions.values()):
+            return None
+        return self.exit_ml.on_price(tr.exit, lambda: ExitLearner.features(
+            tr.created.ts, tr.times, tr.prices, tr.peak_price, t, price, tr.migrated, tr.danger), t, price)
+
+    def _update_sims(self, tr: Track, t: float, price: float, danger: str | None, hold_p: float | None = None) -> None:
         done = []
         for did, states in tr.sims.items():
             for name, st in states.items():
                 if not st.closed:
-                    st.on_price(self.policies[name], t, price, danger)
+                    st.on_price(self.policies[name], t, price, danger, hold_p)
             if all(st.closed for st in states.values()):
                 done.append(did)
         for did in done:
             self._finalize(did, t)
 
-    def _update_positions(self, mint: str, t: float, price: float, danger: str | None) -> None:
+    def _update_positions(self, mint: str, t: float, price: float, danger: str | None, hold_p: float | None = None) -> None:
         if not self.positions:
             return
         for pos in [p for p in self.positions.values() if p.mint == mint and not p.state.closed]:
-            for a in pos.state.on_price(self.policies[pos.policy], t, price, danger):
+            for a in pos.state.on_price(self.policies[pos.policy], t, price, danger, hold_p):
                 self.signals.append({"decision_id": pos.decision_id, "mint": mint, "policy": pos.policy,
                                      "symbol": pos.symbol, **a.__dict__})
 
@@ -273,6 +289,7 @@ class LabelerEngine:
                     "mint": mint, "peak_mc_sol": tr.peak_price * 1e9, "rugged": tr.any_rug,
                     "outcome": {"winner": tr.any_winner, "migrated": tr.migrated, "n_trades": len(tr.times)},
                 })
+                self.exit_ml.close(tr.exit, tr.prices[-1] if tr.prices else 0.0)
                 del self.tracks[mint]
         return closed, finals
 

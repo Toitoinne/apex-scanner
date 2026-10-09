@@ -145,6 +145,7 @@ class Notifier:
             "STOP": f"🔴 <b>SORS ({part})</b> — stop de protection touché",
             "DANGER": f"🚨 <b>SORS VITE ({part})</b> — {e(ev.get('reason_text', ''))}",
             "TEMPS": f"⏱ <b>SORS ({part})</b> — fin de la durée de suivi",
+            "APPRIS": f"🧠 <b>SORS ({part})</b> — le bot estime que la hausse est finie ({e(ev.get('reason', ''))})",
         }.get(k, k)
         txt = (f"{head}\n${sym} : prix actuel = x{mult:.2f} ton entrée\n"
                f"Position : {pnl:+.0%}" + (" (clôturée)" if ev["closed"] else " (le reste continue de courir)")
