@@ -88,4 +88,7 @@ if [ -n "$PROBLEM" ]; then
   exit 1
 fi
 say "SUCCÈS ${NEW:0:7}"
+# ménage : anciennes versions de l'image et cache de construction (chaque déploiement en laisse ~0,7 Go)
+docker image prune -f >/dev/null 2>&1 || true
+docker builder prune -f --filter until=12h >/dev/null 2>&1 || true
 notify "🛠 Mise à jour déployée : « $MSG » (${NEW:0:7}). Tests OK, santé OK après 4 min. Annulable : la version précédente est ${OLD:0:7}."
