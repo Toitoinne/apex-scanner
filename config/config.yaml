@@ -142,7 +142,9 @@ fees:
 
 features:
   smart_wallet_min_trades: 8
-  smart_wallet_min_winrate: 0.35
+  smart_wallet_min_winrate: 0.40
+  smart_wallet_max_tokens_per_day: 60   # au-delà : robot qui achète tout (son achat ne dit rien sur un token)
+  bot_tokens_per_day: 200
   sniper_slot_window: 2       # achats dans les N slots suivant la création = snipers
   # Enrichissement CIBLÉ : les appels RPC (graphe de financement, autorités mint/freeze)
   # ne sont faits que pour les tokens candidats à une alerte, sous un budget de crédits

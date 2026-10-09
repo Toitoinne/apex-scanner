@@ -40,7 +40,8 @@ class Track:
     created: TokenCreated
     times: list[float] = field(default_factory=list)
     prices: list[float] = field(default_factory=list)
-    flows: dict[str, list[float]] = field(default_factory=dict)   # wallet -> [sol_in, sol_out, tokens, first_ts, last_ts]
+    # wallet -> [sol_in, sol_out, tokens nets, 1er ts, dernier ts, tokens achetés, tokens vendus, slot du 1er achat]
+    flows: dict[str, list[float]] = field(default_factory=dict)
     early_slots: dict[int, list[str]] = field(default_factory=dict)  # slot -> acheteurs (10 premiers slots)
     pending: int = 0
     closed_emitted: bool = False
@@ -106,13 +107,17 @@ class LabelerEngine:
                 if ev.is_buy and ev.slot and tr.created.slot and ev.slot - tr.created.slot <= 10:
                     tr.early_slots.setdefault(ev.slot, []).append(ev.trader)
                 if ev.ts - tr.created.ts <= 600 or ev.trader in tr.flows:
-                    fl = tr.flows.setdefault(ev.trader, [0.0, 0.0, 0.0, ev.ts, ev.ts])
+                    fl = tr.flows.setdefault(ev.trader, [0.0, 0.0, 0.0, ev.ts, ev.ts, 0.0, 0.0, 0.0])
                     if ev.is_buy:
                         fl[0] += ev.sol
                         fl[2] += ev.tokens
+                        fl[5] += ev.tokens
+                        if not fl[7]:
+                            fl[7] = float(ev.slot or 0)
                     else:
                         fl[1] += ev.sol
                         fl[2] -= ev.tokens
+                        fl[6] += ev.tokens
                     fl[4] = ev.ts
                 danger = tr.danger.on_trade(t, ev.trader, ev.is_buy, ev.sol, ev.tokens, ev.price) if tr.danger else None
                 hold_p = self._exit_signal(tr, t, ev.price)
@@ -303,18 +308,26 @@ class LabelerEngine:
         return out
 
     def _summary(self, tr: Track) -> dict:
-        last_price = tr.prices[-1] if tr.prices else 0.0
-        wallets, flippers = {}, []
-        for w, (sin, sout, tok, first, last) in tr.flows.items():
-            if sin <= 0:
+        # gains RÉELLEMENT encaissés : seulement les wallets qui ont revendu l'essentiel de leur position
+        # (une position non vendue valorisée au dernier prix gonflait les gains des devs et des bundlers)
+        wallets, flippers, snipers = {}, [], []
+        cslot = tr.created.slot or 0
+        for w, fl in tr.flows.items():
+            sin, sout, _tok, first, last, bought, sold, buy_slot = (list(fl) + [0.0, 0.0, 0.0])[:8]
+            if sin <= 0 or bought <= 0 or w == tr.created.creator:
                 continue
-            wallets[w] = sout + max(0.0, tok) * last_price - sin
-            if sout > 0 and last - first < 20:
+            sold_frac = min(1.0, sold / bought)
+            if sold_frac < 0.5:
+                continue
+            wallets[w] = sout - sin * sold_frac
+            if last - first < 20:
                 flippers.append(w)
+            if cslot and buy_slot and buy_slot <= cslot + 1:
+                snipers.append(w)
         if len(wallets) > 300:   # garde les plus gros flux
             wallets = dict(sorted(wallets.items(), key=lambda kv: -abs(kv[1]))[:300])
         return {
             "mint": tr.created.mint, "creator": tr.created.creator, "rugged": tr.any_rug,
-            "winner": tr.any_winner, "wallets": wallets, "fast_flippers": flippers,
+            "winner": tr.any_winner, "wallets": wallets, "fast_flippers": flippers, "snipers": snipers,
             "slot_groups": [g for g in tr.early_slots.values() if len(set(g)) >= 2],
         }

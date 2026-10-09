@@ -20,7 +20,7 @@ from ..safety.filters import SafetyFilters
 from .engine import ClaudeFeature, FeatureEngine
 from .market import MarketContext
 from .metadata import MetadataFetcher
-from .wallets import WalletIntel
+from .wallets import UPSERT_WALLET, WalletIntel
 
 log = logging.getLogger("features")
 GROUP = "features"
@@ -221,10 +221,7 @@ class FeatureService:
     async def consume_closed(self) -> None:
         async for stream, mid, closed in self.bus.consume([B.CLOSED], GROUP, "features-closed"):
             rows = self.intel.update_from_closed(closed)
-            await self.db.executemany(
-                """INSERT INTO wallets (address, n_trades, n_wins, pnl_sol, is_smart, is_bot) VALUES ($1,$2,$3,$4,$5,$6)
-                   ON CONFLICT (address) DO UPDATE SET n_trades=$2, n_wins=$3, pnl_sol=$4, is_smart=$5, is_bot=$6, updated_at=now()""",
-                rows)
+            await self.db.executemany(UPSERT_WALLET, rows)
             dev = closed.get("creator")
             if dev:
                 d = self.intel.dev_stats(dev)
@@ -305,6 +302,16 @@ class FeatureService:
 
     async def run(self) -> None:
         await self.intel.load(self.db)
+        if not await self.bus.r.get("apex:wallets:v2"):
+            # une seule fois : recalcul des smart wallets avec la méthode v2 (gains encaissés, robots écartés)
+            hb = asyncio.create_task(B.heartbeat_loop(self.bus, "features"))
+            try:
+                await self.intel.rebuild_from_trades(self.db)
+                await self.bus.r.set("apex:wallets:v2", "1")
+            except Exception:  # noqa: BLE001
+                log.exception("recalcul des wallets v2 impossible : on garde l'ancienne base")
+            finally:
+                hb.cancel()
         await self.rebuild()
         await asyncio.gather(
             self.consume_raw(), self.consume_closed(), self.tick_loop(), self.flush_loop(),

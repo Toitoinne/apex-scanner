@@ -37,6 +37,31 @@ class UnionFind:
             self.p[ra] = rb
 
 
+UPSERT_WALLET = """INSERT INTO wallets (address, n_trades, n_wins, pnl_sol, is_smart, is_bot, fast_flips, snipes, first_trade)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,to_timestamp($9))
+    ON CONFLICT (address) DO UPDATE SET n_trades=$2, n_wins=$3, pnl_sol=$4, is_smart=$5, is_bot=$6,
+        fast_flips=$7, snipes=$8, first_trade=to_timestamp($9), updated_at=now()"""
+
+
+def classify(s: dict, now: float, cfg: dict) -> tuple[bool, bool]:
+    """(smart, robot) d'après des gains RÉELLEMENT encaissés. Un « smart wallet » est un trader
+    sélectif et régulièrement gagnant : pas un robot qui achète tout, pas un sniper de la première
+    seconde, pas un flipper qui revend en quelques secondes, pas un taux de réussite irréaliste."""
+    n = s.get("n_trades", 0)
+    if n <= 0:
+        return False, False
+    wr = s.get("n_wins", 0) / n
+    days = max(1.0, (now - s.get("first", now)) / 86400)
+    rate = n / days
+    flips, snipes = s.get("fast_flips", 0) / n, s.get("snipes", 0) / n
+    bot = ((n >= 10 and flips > 0.6) or (n >= 20 and wr > 0.9)
+           or rate > cfg.get("bot_tokens_per_day", 200) or (n >= 10 and snipes > 0.6))
+    smart = (not bot and n >= cfg.get("smart_wallet_min_trades", 8) and s.get("pnl", 0.0) > 0
+             and cfg.get("smart_wallet_min_winrate", 0.4) <= wr <= 0.9
+             and rate <= cfg.get("smart_wallet_max_tokens_per_day", 60) and snipes < 0.5 and flips < 0.6)
+    return smart, bot
+
+
 class WalletIntel:
     def __init__(self, cfg: dict, rpc_url: str | None = None, db: Any = None):
         self.cfg = cfg
@@ -115,25 +140,28 @@ class WalletIntel:
         return len({uf.find(w) for w in buyers})
 
     # ---------- mise à jour à la clôture d'un token ----------
-    def update_from_closed(self, closed: dict) -> list[tuple]:
-        """closed = {mint, creator, rugged, winner, wallets: {w: pnl_sol}} → lignes DB."""
+    def _apply(self, w: str, s: dict, now: float) -> None:
+        smart, bot = classify(s, now, self.cfg)
+        (self.smart.add if smart else self.smart.discard)(w)
+        (self.bots.add if bot else self.bots.discard)(w)
+
+    def update_from_closed(self, closed: dict, now: float | None = None) -> list[tuple]:
+        """closed = {mint, creator, rugged, winner, wallets: {w: gain encaissé en SOL}, fast_flippers, snipers}
+        → lignes DB. Seuls les wallets ayant revendu l'essentiel de leur position y figurent."""
+        now = now or time.time()
         rows = []
-        mn = self.cfg.get("smart_wallet_min_trades", 8)
-        wr_min = self.cfg.get("smart_wallet_min_winrate", 0.35)
+        flippers, snipers = set(closed.get("fast_flippers", [])), set(closed.get("snipers", []))
         for w, pnl in closed.get("wallets", {}).items():
-            s = self.stats.setdefault(w, {"n_trades": 0, "n_wins": 0, "pnl": 0.0, "fast_flips": 0})
+            s = self.stats.setdefault(w, {"n_trades": 0, "n_wins": 0, "pnl": 0.0, "fast_flips": 0, "snipes": 0})
+            s.setdefault("first", now)
             s["n_trades"] += 1
             s["n_wins"] += 1 if pnl > 0 else 0
             s["pnl"] += pnl
-            if w in closed.get("fast_flippers", []):
-                s["fast_flips"] += 1
-            if s["n_trades"] >= mn and s["n_wins"] / s["n_trades"] >= wr_min and s["pnl"] > 0:
-                self.smart.add(w)
-            else:
-                self.smart.discard(w)
-            if s["n_trades"] >= 30 and s["fast_flips"] / s["n_trades"] > 0.8:
-                self.bots.add(w)
-            rows.append((w, int(s["n_trades"]), int(s["n_wins"]), float(s["pnl"]), w in self.smart, w in self.bots))
+            s["fast_flips"] = s.get("fast_flips", 0) + (w in flippers)
+            s["snipes"] = s.get("snipes", 0) + (w in snipers)
+            self._apply(w, s, now)
+            rows.append((w, int(s["n_trades"]), int(s["n_wins"]), float(s["pnl"]), w in self.smart, w in self.bots,
+                         int(s["fast_flips"]), int(s["snipes"]), s["first"]))
         for group in closed.get("slot_groups", []):
             g = sorted(set(group))[:20]
             for i, a in enumerate(g):
@@ -153,8 +181,11 @@ class WalletIntel:
         return rows
 
     async def load(self, db: Any) -> None:
-        for r in await db.fetch("SELECT address, n_trades, n_wins, pnl_sol, is_smart, is_bot, funder, funder2, first_seen FROM wallets"):
-            self.stats[r["address"]] = {"n_trades": r["n_trades"], "n_wins": r["n_wins"], "pnl": r["pnl_sol"], "fast_flips": 0}
+        for r in await db.fetch("""SELECT address, n_trades, n_wins, pnl_sol, is_smart, is_bot, funder, funder2, first_seen,
+                                          coalesce(fast_flips, 0) fast_flips, coalesce(snipes, 0) snipes, first_trade FROM wallets"""):
+            self.stats[r["address"]] = {"n_trades": r["n_trades"], "n_wins": r["n_wins"], "pnl": r["pnl_sol"],
+                                        "fast_flips": r["fast_flips"], "snipes": r["snipes"],
+                                        "first": r["first_trade"].timestamp() if r["first_trade"] else time.time()}
             if r["is_smart"]:
                 self.smart.add(r["address"])
             if r["is_bot"]:
@@ -164,6 +195,44 @@ class WalletIntel:
         for r in await db.fetch("SELECT address, n_tokens, n_rugs, n_winners FROM devs"):
             self.devs[r["address"]] = {"n_tokens": r["n_tokens"], "n_rugs": r["n_rugs"], "n_winners": r["n_winners"]}
         log.info("wallet intel : %d wallets, %d smart, %d bots, %d devs", len(self.stats), len(self.smart), len(self.bots), len(self.devs))
+
+    async def rebuild_from_trades(self, db: Any, hours: int = 48) -> int:
+        """Recalcule toutes les statistiques des wallets depuis les trades conservés (gains encaissés
+        seulement, créateurs exclus) avec la classification v2. Appelé une fois après la mise à jour."""
+        rows = await db.fetch(
+            """WITH wm AS (
+                 SELECT t.trader w, t.mint,
+                        sum(sol) FILTER (WHERE is_buy) sin, coalesce(sum(sol) FILTER (WHERE NOT is_buy), 0) sout,
+                        sum(tokens) FILTER (WHERE is_buy) tb, coalesce(sum(tokens) FILTER (WHERE NOT is_buy), 0) tsold,
+                        min(ts) FILTER (WHERE is_buy) first_buy, max(ts) FILTER (WHERE NOT is_buy) last_sell,
+                        min(slot) FILTER (WHERE is_buy) buy_slot
+                 FROM trades t WHERE ts > now() - make_interval(hours => $1) GROUP BY 1, 2),
+               wr AS (
+                 SELECT wm.*, least(1, tsold / tb) sold_frac, k.created_slot, k.creator
+                 FROM wm JOIN tokens k USING (mint) WHERE sin > 0 AND tb > 0)
+               SELECT w, count(*) n, count(*) FILTER (WHERE sout - sin * sold_frac > 0) wins,
+                      sum(sout - sin * sold_frac) pnl,
+                      count(*) FILTER (WHERE extract(epoch from last_sell - first_buy) < 20) flips,
+                      count(*) FILTER (WHERE created_slot > 0 AND buy_slot <= created_slot + 1) snipes,
+                      extract(epoch from min(first_buy))::float8 first
+               FROM wr WHERE w IS DISTINCT FROM creator AND sold_frac >= 0.5 GROUP BY 1""", hours)
+        now = time.time()
+        for s in self.stats.values():
+            s.update(n_trades=0, n_wins=0, pnl=0.0, fast_flips=0, snipes=0)
+        self.smart.clear()
+        self.bots.clear()
+        out = []
+        for r in rows:
+            s = self.stats.setdefault(r["w"], {})
+            s.update(n_trades=r["n"], n_wins=r["wins"], pnl=float(r["pnl"]), fast_flips=r["flips"], snipes=r["snipes"],
+                     first=float(r["first"]))
+            self._apply(r["w"], s, now)
+            out.append((r["w"], r["n"], r["wins"], float(r["pnl"]), r["w"] in self.smart, r["w"] in self.bots,
+                        r["flips"], r["snipes"], float(r["first"])))
+        await db.execute("UPDATE wallets SET n_trades=0, n_wins=0, pnl_sol=0, is_smart=false, is_bot=false, fast_flips=0, snipes=0")
+        await db.executemany(UPSERT_WALLET, out)
+        log.info("wallets recalculés (v2) : %d wallets, %d smart, %d robots", len(out), len(self.smart), len(self.bots))
+        return len(out)
 
     # ---------- graphe de financement (asynchrone, budgété) ----------
     def request_funding(self, w: str, priority: float = 0.0, ttl_s: float = 600.0) -> None:
