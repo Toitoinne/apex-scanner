@@ -3,6 +3,7 @@
 
 Expose EXACTEMENT les mêmes actions que la clé SSH restreinte, en déléguant à followup.sh :
   GET  /report            rapport complet (lecture seule)
+  GET  /audit             vérification des données réelles (blockchain, DexScreener)
   GET  /logs/<service>    journaux d'un service
   POST /deploy/<ref>      lance un déploiement sécurisé (safe_deploy.sh) en arrière-plan → 202
   GET  /deploy            avancement / résultat du dernier déploiement
@@ -56,8 +57,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._auth():
             return
         path = self.path.split("?")[0].rstrip("/")
-        if path == "/report":
-            code, out = run("report")
+        if path in ("/report", "/audit"):
+            code, out = run(path[1:])
             return self._send(200 if code == 0 else 500, out)
         if path.startswith("/logs/") and path[6:] in SERVICES:
             return self._send(200, run(f"logs {path[6:]}")[1])

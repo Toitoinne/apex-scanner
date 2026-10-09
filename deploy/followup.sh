@@ -15,6 +15,10 @@ deploy)
   # déploiement d'une branche/commit du dépôt GitHub, avec tous les contrôles (voir safe_deploy.sh)
   exec /opt/apex/deploy/safe_deploy.sh "$ARG"
   ;;
+audit)
+  # vérification des données réelles contre la blockchain et DexScreener (lecture seule)
+  docker compose exec -T notifier python -m apex.reporting.data_audit </dev/null
+  ;;
 logs)
   case "$ARG" in ingestor|features|labeler|learner|supervisor|notifier|dashboard|trader) ;;
     *) echo "service inconnu"; exit 2 ;; esac
@@ -112,5 +116,5 @@ notify)
 ${TEXT}"
   ;;
 *)
-  echo "commande non autorisée (report | notify | logs <service> | deploy <branche>)"; exit 1 ;;
+  echo "commande non autorisée (report | audit | notify | logs <service> | deploy <branche>)"; exit 1 ;;
 esac
