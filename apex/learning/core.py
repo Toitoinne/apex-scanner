@@ -52,6 +52,7 @@ class Learner:
         self.horizons = c["models"]["horizons"]
         self.ensembles = {h: HorizonEnsemble(h, c["models"], c["calibration"]["method"]) for h in self.horizons}
         self.evolved: dict[str, dict] = {}
+        self.ev = None                  # modèles « gain attendu par stratégie » ACTIFS (sinon None : pas de choix AUTO)
         self.bandit = self._new_bandit()
         self.short = [h for h in self.horizons if c["labels"][h]["horizon_s"] <= 3600]
         self.long = [h for h in self.horizons if h not in self.short]
@@ -76,11 +77,14 @@ class Learner:
 
     def _new_bandit(self) -> AlertBandit:
         b = self.cfg.data["bandit"]
-        scores = {k: v["thresholds"] for k, v in b.get("scores", {"x2": {"thresholds": b["thresholds"]}}).items()}
+        scores = {k: v["thresholds"] for k, v in b.get("scores", {"x2": {"thresholds": b["thresholds"]}}).items()
+                  if k != "ev" or getattr(self, "ev", None) is not None}
         allp = build_panel(self.cfg.data.get("exits", {}), getattr(self, "evolved", {}))
         policies = b.get("policies") or ["TP2_SL50"]
         if policies == "all":
             policies = list(allp)
+        if getattr(self, "ev", None) is not None:
+            policies = list(policies) + ["AUTO"]      # stratégie choisie token par token
         return AlertBandit(scores_cfg=scores, points=[str(p) for p in b["decision_points"]], policies=policies,
                            alerts_min=b["alerts_per_day"]["min"], alerts_max=b["alerts_per_day"]["max"],
                            discount=b["discount"])
@@ -88,7 +92,7 @@ class Learner:
     def score_horizons(self) -> dict[str, str]:
         b = self.cfg.data["bandit"]
         return {k: v["horizon"] for k, v in b.get("scores", {"x2": {"horizon": self.primary}}).items()
-                if v["horizon"] in self.ensembles}
+                if v.get("horizon") in self.ensembles}
 
     # ------------------------------------------------------------------
     def _primary_threshold(self) -> float:
@@ -120,9 +124,14 @@ class Learner:
         scores = {sc: preds[h][champions[h]][1] for sc, h in self.score_horizons().items()}
         # seuls les tokens réellement alertables servent à évaluer les politiques d'alerte
         eligible = (not d.blocked and d.features.get("unique_buyers", 0) >= self.cfg.get("bandit.min_buyers_to_alert", 10))
+        auto_policy = None
+        if self.ev is not None:
+            auto_policy, ev = self.ev.best(x) if eligible else (None, -1.0)
+            scores["ev"] = ev
         self.long_store[d.decision_id] = {
             "ts": d.ts, "point": d.point, "mint": d.mint, "scores": scores, "alerted": False, "eligible": eligible,
             "preds": {h: preds[h] for h in self.long}, "champions": {h: champions[h] for h in self.long},
+            "auto_policy": auto_policy,
         }
         if eligible:
             self.bandit.observe_decision(d.point, scores, d.ts)
@@ -152,12 +161,16 @@ class Learner:
         d = dc.d
         fee = self.cfg.get("fees.pumpswap_fee_bps") if d.meta.get("migrated") else self.cfg.get("fees.pump_fee_bps")
         arm = self.bandit.active_arm()
-        pol_cfg = build_panel(self.cfg.data.get("exits", {}), self.evolved).get(arm.policy) or {}
+        policy = arm.policy
+        if policy == "AUTO":        # stratégie choisie pour CE token par le modèle de gain attendu
+            policy = (self.long_store.get(d.decision_id) or {}).get("auto_policy") or "TP2_SL50"
+        pol_cfg = build_panel(self.cfg.data.get("exits", {}), self.evolved).get(policy) or {}
         return {
             "decision_id": d.decision_id, "mint": d.mint, "point": d.point, "ts": d.ts,
             "entry_price": d.entry_price, "v_sol": d.v_sol, "v_tokens": d.v_tokens,
             "migrated": bool(d.meta.get("migrated")), "score": arm.score, "scores": {k: round(v, 4) for k, v in scores.items()},
-            "policy": arm.policy, "policy_description": pol_cfg.get("description", arm.policy),
+            "policy": policy, "policy_description": pol_cfg.get("description", policy)
+            + (" (stratégie choisie pour ce token)" if arm.policy == "AUTO" else ""),
             "arm_mean_pnl": round(arm.mean(), 4), "arm_n": round(arm.n, 1),
             "name": d.meta.get("name"), "symbol": d.meta.get("symbol"), "mc_sol": d.mc_sol,
             "p": p, "model": dc.champions[self.primary], "arm": self.bandit.active,
@@ -206,7 +219,10 @@ class Learner:
         st["rewarded"] = True       # un même Outcome rejoué après redémarrage n'est compté qu'une fois
         self.n_outcomes += 1
         if st.get("eligible", True) and not (self.gaps and overlaps_gap(self.gaps, st["ts"], o.ts, min_len=1800)):
-            self.bandit.observe_reward(st["point"], st["scores"], o.pnl)
+            pnl = o.pnl
+            if st.get("auto_policy") in pnl:
+                pnl = {**pnl, "AUTO": pnl[st["auto_policy"]]}      # récompense du choix token par token
+            self.bandit.observe_reward(st["point"], st["scores"], pnl)
         return {"alerted": st["alerted"]}
 
     def on_label_long(self, lb: Label, x: dict[str, float]) -> LabelResult:
@@ -306,6 +322,14 @@ class Learner:
         if len(self.mint_preds) > 100_000:
             for m in list(self.mint_preds)[:50_000]:
                 self.mint_preds.pop(m, None)
+
+    def set_ev(self, models: Any) -> None:
+        """Active (ou coupe, models=None) le choix de stratégie token par token : bras AUTO et score ev."""
+        if (models is None) == (self.ev is None) and models is self.ev:
+            return
+        self.ev = models
+        fresh = self._new_bandit()
+        self.bandit.sync_arms(fresh.scores_cfg, fresh.points, fresh.policies)
 
     def set_evolved(self, evolved: dict[str, dict]) -> None:
         """Nouvelles variantes de stratégies de sortie : bras du bandit ajoutés / retirés."""
@@ -497,6 +521,7 @@ class Learner:
         self.ensembles = st["ensembles"]
         self.bandit = st["bandit"]
         self.evolved = getattr(self, "evolved", {}) or {}
+        self.ev = getattr(self, "ev", None)
         if not hasattr(self.bandit, "scores_cfg"):
             self.bandit = self._new_bandit()      # ancien format (seuil seul) : nouveau bandit
         else:

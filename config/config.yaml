@@ -211,6 +211,8 @@ bandit:
   scores:
     x2:  {horizon: L60,     thresholds: [0.03, 0.05, 0.07, 0.10, 0.13, 0.16, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.70]}
     x10: {horizon: X10_24H, thresholds: [0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12]}
+    # gain attendu (choix de stratégie token par token) : utilisé seulement quand le modèle a fait ses preuves
+    ev:  {thresholds: [0.0, 0.02, 0.05, 0.10, 0.20]}
   policies: all                  # toutes les stratégies de exits (config + panel)
   decision_points: ["10", "15", "30", "60", "120", "300", "600", "migration"]
   resample_every_s: 1800
@@ -261,6 +263,10 @@ claude:
   max_calls_per_day: 2           # plafond dur (déclencheurs plateau/régression inclus) ≈ 0,15–0,25 $/appel
   max_errors_in_prompt: 20
   sandbox_timeout_s: 10
+
+# Gain attendu par stratégie (apex/learning/ev.py) : réentraîné et validé toutes les 6 h sur des tokens
+# jamais vus ; ne prend la main que s'il bat la meilleure stratégie fixe de 1 point, 2 fois de suite
+ev: {hours: 48, min_rows: 3000, clip: [-1.0, 3.0], margin: 0.01, retrain_every_s: 21600}
 
 reports:
   every_s: 21600                  # rapport technique (commande /tech)

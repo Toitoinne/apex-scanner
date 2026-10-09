@@ -8,6 +8,7 @@ dédupliquées par decision_id (contrainte UNIQUE en base).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from pathlib import Path
@@ -195,6 +196,41 @@ class LearnerService:
                 last_lgbm = now
             await asyncio.sleep(2)
 
+    async def ev_loop(self) -> None:
+        """Gain attendu par stratégie : réentraîné et VALIDÉ sur des tokens jamais vus toutes les 6 h ;
+        ne prend la main (bras AUTO) que s'il bat la meilleure stratégie fixe deux fois de suite."""
+        from . import ev as EV
+        c = self.cfg
+        await asyncio.sleep(600)            # laisse le service démarrer
+        history: list[dict] = (await self.bus.get_json("apex:ev:history", []) or [])[-6:]
+        while True:
+            try:
+                rs = await self.db.fetch(
+                    """SELECT extract(epoch from o.ts)::float8 ts, d.features, o.pnl FROM outcomes o JOIN decisions d USING (decision_id)
+                       WHERE o.ts > now() - make_interval(hours => $1) AND d.ts > now() - make_interval(hours => $1 + 24)
+                         AND NOT d.blocked AND (d.features->>'unique_buyers')::float >= $2""",
+                    c.get("ev.hours", 48), c.get("bandit.min_buyers_to_alert", 10))
+                rows = []
+                for r in rs:
+                    f = r["features"] if isinstance(r["features"], dict) else json.loads(r["features"])
+                    p = r["pnl"] if isinstance(r["pnl"], dict) else json.loads(r["pnl"])
+                    rows.append((f, {k: float(v) for k, v in p.items()}, r["ts"]))
+                pols = sorted({k for _, p, _ in rows for k in p})
+                if len(rows) >= c.get("ev.min_rows", 3000):
+                    models = await asyncio.to_thread(EV.train, rows, pols, tuple(c.get("ev.clip", [-1.0, 3.0])),
+                                                     c.get("ev.min_rows", 3000))
+                    history = (history + [models.stats])[-6:]
+                    active = EV.should_activate(history, c.get("ev.margin", 0.01))
+                    async with self._lock:
+                        self.learner.set_ev(models if active else None)
+                    msg = EV.summary(models.stats) + (" — ACTIVÉ" if active else " — en observation")
+                    await self.bus.set_json("apex:ev:history", history)
+                    await self.bus.set_json("apex:ev:stats", {**models.stats, "actif": active, "resume": msg, "ts": time.time()})
+                    await self.db.log_event("info", "ev", msg, {k: v for k, v in models.stats.items()})
+            except Exception:  # noqa: BLE001
+                log.exception("gain attendu par stratégie")
+            await asyncio.sleep(c.get("ev.retrain_every_s", 21600))
+
     async def _periodic_once(self, c, last_champ: float, last_bandit: float, last_lgbm: float) -> None:
         now = time.time()
         async with self._lock:
@@ -235,6 +271,7 @@ class LearnerService:
             B.resilient("flush", lambda _: self.flush_loop()),
             B.resilient("autosave", lambda _: self.autosave_loop()),
             B.resilient("periodic", lambda _: self.periodic_loop()),
+            B.resilient("ev", lambda _: self.ev_loop()),
         )
 
 
