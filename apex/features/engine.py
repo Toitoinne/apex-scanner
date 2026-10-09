@@ -166,6 +166,13 @@ class FeatureEngine:
             st = self.states.get(mint)
             if st is None:
                 continue
+            # jamais de décision en retard : elle porterait l'heure prévue mais les prix du moment
+            # (ex. après un redémarrage) — fausses entrées et faux résultats
+            planned = st.due.get(point) or (st.migrated_ts + 3 if point == "migration" and st.migrated_ts
+                                             else st.t0 + float(point) if point.isdigit() else due)
+            if now - planned > AMM_WAIT_S + 60:
+                st.emitted_points.add(point)
+                continue
             d = self.make_decision(st, point, due)
             if d:
                 out.append(d)

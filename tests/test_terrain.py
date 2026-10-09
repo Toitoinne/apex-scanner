@@ -52,3 +52,16 @@ def test_study_points_do_not_touch_current_learning():
                  entry_price=1e-6, spot_price=1e-6, mc_sol=1000, v_sol=90, v_tokens=9e7)
     rows, alert = lr.on_decision(d)
     assert rows == [] and alert is None and "M:mig60" not in lr.long_store
+
+
+def test_no_late_decisions_after_a_pause():
+    """Un point de décision traité très en retard (redémarrage) est abandonné : il porterait l'heure
+    prévue avec les prix du moment."""
+    eng = _engine()
+    eng.on_event(TokenCreated(mint="L", name="l", symbol="L", uri="", creator="dev", bonding_curve="", slot=0, ts=0.0, signature="c"))
+    for i in range(20):
+        eng.on_event(Trade(mint="L", signature=f"s{i}", slot=0, ts=1.0 + i, trader=f"w{i}", is_buy=True, sol=0.5,
+                           tokens=1e7, v_sol=31.0 + i, v_tokens=1.0e9))
+    late = eng.tick(1000.0)                 # on ne revient qu'à t = 1000 s : 10 s … 600 s sont en retard
+    assert [d.point for d in late] == ["600"] or late == []
+    assert all(1000.0 - (d.ts) <= 300 for d in late)
