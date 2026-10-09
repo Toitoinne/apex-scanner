@@ -268,6 +268,14 @@ claude:
 # jamais vus ; ne prend la main que s'il bat la meilleure stratégie fixe de 1 point, 2 fois de suite
 ev: {hours: 48, min_rows: 3000, clip: [-1.0, 3.0], margin: 0.01, retrain_every_s: 21600}
 
+# TERRAIN EN OBSERVATION : décisions d'étude après la migration et sur les 2es vagues. Aucune alerte, pas
+# d'apprentissage des modèles actuels : les 48 stratégies de sortie y sont simulées pour mesurer s'il y a de
+# l'argent à gagner (classement /sorties). À intégrer seulement si ça s'avère rentable.
+observe:
+  enabled: true
+  after_migration_s: [60, 300, 900]
+  second_wave: {min_age_s: 3600, new_buyers_120s: 8, rise_10min: 0.3}
+
 reports:
   every_s: 21600                  # rapport technique (commande /tech)
   bulletin_hours_paris: [9, 15, 21]   # bulletins en langage simple ; celui de 9 h = bilan 24 h

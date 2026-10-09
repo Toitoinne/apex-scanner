@@ -47,7 +47,7 @@ class ExitLearner:
         self.max_pending = int(self.horizon_s / self.every_s) + 2
         self.model = compose.Pipeline(
             preprocessing.StandardScaler(),
-            linear_model.LogisticRegression(optimizer=optim.SGD(0.01), l2=1e-4),
+            linear_model.LogisticRegression(optimizer=optim.Adam(0.005), l2=1e-4),
         )
         self.learn = True                 # coupé pendant la reprise après redémarrage (pas de double apprentissage)
         self.n_learned = 0
@@ -85,13 +85,24 @@ class ExitLearner:
         return x
 
     @property
+    def skill(self) -> float | None:
+        """De combien le modèle se trompe moins que le taux de base (récent). None : pas assez évalué."""
+        if self.n_eval < 300 or self.ll_base <= 0:
+            return None
+        return 1 - self.ll_model / self.ll_base
+
+    @property
     def ready(self) -> bool:
-        return self.n_learned >= self.min_samples
+        """Utilisé pour décider seulement s'il a assez appris ET fait mieux que le hasard : sinon les
+        stratégies « apprises » se replient sur leurs garde-fous (stop, stop suiveur)."""
+        sk = self.skill
+        return self.n_learned >= self.min_samples and (sk is None or sk > 0)
+
+    def _raw(self, x: dict[str, float]) -> float:
+        return float(self.model.predict_proba_one(x).get(True, 0.5))
 
     def predict(self, x: dict[str, float]) -> float | None:
-        if not self.ready:
-            return None
-        return float(self.model.predict_proba_one(x).get(True, 0.5))
+        return self._raw(x) if self.ready else None
 
     def _learn(self, x: dict, y: int, p: float | None) -> None:
         if not self.learn:
@@ -129,8 +140,9 @@ class ExitLearner:
         if t - st.last_cp >= self.every_s:
             st.last_cp = t
             x = x_fn()
-            st.hold_p = self.predict(x)
-            st.pending.append((t, price, x, st.hold_p))
+            raw = self._raw(x) if self.n_learned >= self.min_samples else None
+            st.hold_p = raw if raw is not None and self.ready else None
+            st.pending.append((t, price, x, raw))      # évalué même s'il n'est pas utilisé
             if len(st.pending) > self.max_pending:
                 st.pending.pop(0)
         return st.hold_p
@@ -142,7 +154,7 @@ class ExitLearner:
         st.pending = []
 
     def summary(self) -> dict:
-        skill = (1 - self.ll_model / self.ll_base) if self.ll_base > 0 else None
+        skill = self.skill
         return {"situations_apprises": self.n_learned, "pret": self.ready,
                 "taux_hausse": round(self.n_pos / self.n_learned, 3) if self.n_learned else None,
                 "fiabilite": round(skill, 3) if skill is not None else None}

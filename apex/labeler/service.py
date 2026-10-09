@@ -303,6 +303,9 @@ class LabelerService:
             with open(self._exit_path(), "rb") as f:
                 st = pickle.load(f)
             ml = self.engine.exit_ml
+            if st.get("version") != 2:          # nouveau modèle (Adam + nouveaux indices) : on réapprend
+                log.info("modèle de sortie : nouvelle version, réapprentissage depuis zéro")
+                return
             ml.model, ml.n_learned, ml.n_pos = st["model"], st["n_learned"], st["n_pos"]
             ml.ll_model, ml.ll_base, ml.n_eval = st["ll_model"], st["ll_base"], st["n_eval"]
             log.info("modèle de sortie rechargé : %d situations apprises", ml.n_learned)
@@ -318,7 +321,7 @@ class LabelerService:
             tmp = self._exit_path().with_suffix(".tmp")
             tmp.parent.mkdir(parents=True, exist_ok=True)
             with open(tmp, "wb") as f:
-                pickle.dump({"model": ml.model, "n_learned": ml.n_learned, "n_pos": ml.n_pos, "ll_model": ml.ll_model,
+                pickle.dump({"version": 2, "model": ml.model, "n_learned": ml.n_learned, "n_pos": ml.n_pos, "ll_model": ml.ll_model,
                              "ll_base": ml.ll_base, "n_eval": ml.n_eval}, f)
             tmp.replace(self._exit_path())
         except Exception:  # noqa: BLE001

@@ -190,6 +190,11 @@ def render(d: dict, title: str) -> str:
                    "perd": "perd encore de l'argent"}.get(best["verdict"], "")
         lines.append(f"• Meilleure façon de revendre en ce moment ({best['n_testees']} testées) : {e(best['description'])} — "
                      f"{best['mean']:+.1%} par trade, {verdict} (/sorties)".replace(".", ",", 1))
+    for pt, b in (d.get("terrains") or {}).items():
+        name = {"mig60": "1 min après migration", "mig300": "5 min après migration", "mig900": "15 min après migration",
+                "vague2": "2e vague"}.get(pt, pt)
+        lines.append(f"• Nouveau terrain « {name} » (observation) : {b['mean']:+.1%} par trade au mieux, "
+                     f"{b['n']} cas".replace(".", ",", 1))
     evs = d.get("ev") or {}
     if evs.get("auto_moyen") is not None:
         lines.append("• Choix de la stratégie token par token : " + ("✅ ACTIF, il fait mieux qu'une stratégie unique"
@@ -266,6 +271,7 @@ async def gather(db: Any, bus: Any, cfg: Any, hours: int, record: bool = True) -
     sel = board.get("selection") or []
     d["best_exit"] = {**sel[0], "n_testees": len(board.get("toutes") or sel)} if sel else None
     d["ev"] = await bus.get_json("apex:ev:stats", {}) or {}
+    d["terrains"] = {pt: rk[0] for pt, rk in (board.get("terrains") or {}).items() if rk}
     d["exit_model"] = ((await bus.get_json("apex:labeler:stats", {}) or {}).get("sortie_apprise") or {})
     d["problems"] = await health_problems(bus)
     return d

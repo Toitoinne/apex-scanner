@@ -65,6 +65,7 @@ class FeatureEngine:
         self.fee_bps = cfg["fees"]["pump_fee_bps"]
         self.amm_fee_bps = cfg["fees"]["pumpswap_fee_bps"]
         self.fcfg = cfg["features"]
+        self.obs = cfg.get("observe", {}) or {}
         self.states: dict[str, TokenState] = {}
         self.heap: list[tuple[float, str, str]] = []
         self.claude_features: dict[str, ClaudeFeature] = {}
@@ -86,6 +87,7 @@ class FeatureEngine:
             if st is None:
                 return []
             st.apply(ev, self.fcfg.get("sniper_slot_window", 2))
+            self._observe_activity(st, ev.ts, ev.trader, ev.is_buy, ev.price)
             if (ev.mint not in self.candidates and ev.ts - st.t0 <= 30
                     and len(st.first_buy_ts) >= self.fcfg.get("candidate_trigger_buyers", 12)):
                 self.mark_candidate(ev.mint)
@@ -100,6 +102,16 @@ class FeatureEngine:
                 st.amm_price, st.amm_ts = ev.price, ev.ts
                 if ev.pool_sol:
                     st.amm_pool_sol = ev.pool_sol
+                if st.amm_first_price is None:
+                    st.amm_first_price = ev.price
+                st.amm_peak = max(st.amm_peak, ev.price)
+                if ev.trader:                          # vrai trade PumpSwap décodé
+                    st.amm_n += 1
+                    if ev.is_buy:
+                        st.amm_buy_sol += ev.sol or 0.0
+                    else:
+                        st.amm_sell_sol += ev.sol or 0.0
+                    self._observe_activity(st, ev.ts, ev.trader, bool(ev.is_buy), ev.price)
             return []
         if isinstance(ev, Migration):
             self.market.on_migration(ev.ts)
@@ -111,8 +123,36 @@ class FeatureEngine:
                 return []
             # léger délai : laisse arriver les trades du même slot qui complètent la courbe
             heapq.heappush(self.heap, (ev.ts + 3, ev.mint, "migration"))
+            st.due["migration"] = ev.ts + 3
+            # TERRAIN EN OBSERVATION : décisions d'étude après la migration (aucune alerte)
+            if self.obs.get("enabled"):
+                for s in self.obs.get("after_migration_s", [60, 300, 900]):
+                    pt = f"mig{s}"
+                    st.due[pt] = ev.ts + s
+                    heapq.heappush(self.heap, (ev.ts + s, ev.mint, pt))
             return []
         return []
+
+    def _observe_activity(self, st: TokenState, ts: float, trader: str, is_buy: bool, price: float) -> None:
+        """Deuxième vague (observation) : un token de plus d'une heure qui repart — beaucoup de NOUVEAUX
+        acheteurs en 2 min et une hausse nette sur 10 min → une décision d'étude « vague2 » (une fois)."""
+        if not self.obs.get("enabled"):
+            return
+        st.recent.append((ts, trader, is_buy, price))
+        while st.recent and st.recent[0][0] < ts - 900:
+            st.recent.popleft()
+        w = self.obs.get("second_wave", {})
+        if ("vague2" in st.emitted_points or "vague2" in st.due or ts - st.t0 < w.get("min_age_s", 3600)
+                or ts - st.last_wave_check < 15):
+            st.seen_traders.add(trader)
+            return
+        st.last_wave_check = ts
+        new = {tr for t, tr, b, _ in st.recent if b and t >= ts - 120 and tr not in st.seen_traders}
+        old_price = next((p for t, _, _, p in st.recent if t >= ts - 600), None)
+        st.seen_traders.update(tr for t, tr, _, _ in st.recent if t < ts - 120)
+        if (len(new) >= w.get("new_buyers_120s", 8) and old_price and price >= old_price * (1 + w.get("rise_10min", 0.3))):
+            st.due["vague2"] = ts
+            heapq.heappush(self.heap, (ts, st.mint, "vague2"))
 
     def mark_candidate(self, mint: str) -> None:
         if mint in self.states and mint not in self.candidates:
@@ -135,7 +175,8 @@ class FeatureEngine:
     def _evict(self, now: float) -> None:
         if len(self.states) < 1000:
             return
-        for m in [m for m, s in self.states.items() if now - s.t0 > STATE_TTL_S]:
+        for m in [m for m, s in self.states.items() if now - s.t0 > STATE_TTL_S
+                  and not (s.migrated_ts and now - s.migrated_ts < 1200)]:     # garde le temps des points après migration
             del self.states[m]
             self._pumped.discard(m)
             self.candidates.discard(m)
@@ -148,7 +189,7 @@ class FeatureEngine:
                 st.amm_ts is not None and now - st.amm_ts <= AMM_FRESH_S):
             # Token déjà migré : le prix de la courbe est périmé. Sans prix PumpSwap récent, pas
             # de prix d'entrée honnête → on attend un relevé, puis on s'abstient.
-            due = st.migrated_ts + 3 if point == "migration" else st.t0 + float(point)
+            due = st.due.get(point) or (st.migrated_ts + 3 if point == "migration" else st.t0 + float(point))
             if now - due < AMM_WAIT_S:
                 heapq.heappush(self.heap, (now + 10, st.mint, point))
                 return None

@@ -22,7 +22,8 @@ WITH o AS (
   SELECT o.decision_id, o.ts, j.k pol, j.v::float pnl
   FROM outcomes o JOIN decisions d USING (decision_id), jsonb_each_text(o.pnl) AS j(k, v)
   WHERE o.ts > now() - make_interval(hours => $1) AND NOT d.blocked
-    AND (d.features->>'unique_buyers')::float >= $2 AND d.ts > now() - make_interval(hours => $1 + 24)),
+    AND (d.features->>'unique_buyers')::float >= $2 AND d.ts > now() - make_interval(hours => $1 + 24)
+    AND (d.point ~ '^[0-9]+$' OR d.point = 'migration')),          -- terrains en observation exclus
 mid AS (SELECT min(ts) + (max(ts) - min(ts)) / 2 m FROM o),
 top AS (
   SELECT p.decision_id FROM predictions p
@@ -35,6 +36,23 @@ SELECT pol, count(*) n, avg(least(pnl, 20)) mean, stddev_samp(least(pnl, 20)) sd
        avg(least(pnl, 20)) FILTER (WHERE o.ts >= (SELECT m FROM mid)) h2
 FROM o WHERE NOT $4 OR o.decision_id IN (SELECT decision_id FROM top) GROUP BY 1
 """
+
+
+SQL_POINT = """
+WITH o AS (
+  SELECT d.point, o.ts, j.k pol, j.v::float pnl
+  FROM outcomes o JOIN decisions d USING (decision_id), jsonb_each_text(o.pnl) AS j(k, v)
+  WHERE o.ts > now() - make_interval(hours => $1) AND d.point = ANY($3) AND NOT d.blocked
+    AND (d.features->>'unique_buyers')::float >= $2),
+mid AS (SELECT point, min(ts) + (max(ts) - min(ts)) / 2 m FROM o GROUP BY 1)
+SELECT o.point, pol, count(*) n, avg(least(pnl, 20)) mean, stddev_samp(least(pnl, 20)) sd,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY pnl) med, avg((pnl > 0)::int) win,
+       avg(least(pnl, 20)) FILTER (WHERE o.ts < mid.m) h1, avg(least(pnl, 20)) FILTER (WHERE o.ts >= mid.m) h2
+FROM o JOIN mid USING (point) GROUP BY 1, 2
+"""
+
+TERRAIN = {"mig60": "1 min après la migration", "mig300": "5 min après la migration", "mig900": "15 min après la migration",
+           "vague2": "deuxième vague (token de plus d'1 h qui repart)"}
 
 
 def rank(rows: list[dict], reference: str = "TP2_SL50", top_k: int = 5) -> list[dict]:
@@ -73,6 +91,17 @@ async def build(db: Any, cfg: Any, hours: int = 48, evolved: dict | None = None)
         for r in ranked:
             r["description"] = desc.get(r["pol"], r["pol"])
         res[key] = ranked
+    # terrains en observation (après migration, 2e vague) : meilleures stratégies, toutes décisions
+    terr: dict[str, list] = {}
+    obs_points = [f"mig{s}" for s in cfg.get("observe.after_migration_s") or [60, 300, 900]] + ["vague2"]
+    rows = [dict(r) for r in await db.fetch(SQL_POINT, hours, cfg.get("bandit.min_buyers_to_alert", 10), obs_points)]
+    for pt in obs_points:
+        rk = rank([r for r in rows if r["point"] == pt and r["n"]])
+        for r in rk:
+            r["description"] = desc.get(r["pol"], r["pol"])
+        if rk:
+            terr[pt] = rk[:5]
+    res["terrains"] = terr
     return res
 
 
@@ -98,6 +127,13 @@ def render(board: dict, top: int = 8) -> str:
         lines += ["", f"{n_ok} stratégie(s) gagnent de façon prouvée pour l'instant." if n_ok else
                   "Aucune ne gagne encore de façon prouvée : le bot doit d'abord mieux choisir ses tokens, "
                   "et il faut plus de recul."]
+    terr = board.get("terrains") or {}
+    if terr:
+        lines += ["", "<b>Nouveaux terrains (en observation, aucune alerte)</b> :"]
+        for pt, rk in terr.items():
+            b = rk[0]
+            lines.append(f"• {TERRAIN.get(pt, pt)} : meilleure façon de revendre {fr(b['mean'])} par trade "
+                         f"({badges[b['verdict']]}, {b['n']} cas) — {b.get('description', b['pol'])}")
     lines += ["", "✅ gagne de façon prouvée · ⚪ pas encore prouvée (peut être de la chance) · 🔻 perd de l'argent",
               "La marge « entre … et … » montre l'incertitude : plus il y a de cas, plus elle se resserre.",
               "Le bot choisit seul parmi elles, et ce classement se met à jour toutes les heures."]

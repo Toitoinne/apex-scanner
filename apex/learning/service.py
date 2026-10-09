@@ -208,7 +208,8 @@ class LearnerService:
                 rs = await self.db.fetch(
                     """SELECT extract(epoch from o.ts)::float8 ts, d.features, o.pnl FROM outcomes o JOIN decisions d USING (decision_id)
                        WHERE o.ts > now() - make_interval(hours => $1) AND d.ts > now() - make_interval(hours => $1 + 24)
-                         AND NOT d.blocked AND (d.features->>'unique_buyers')::float >= $2""",
+                         AND NOT d.blocked AND (d.features->>'unique_buyers')::float >= $2
+                         AND (d.point ~ '^[0-9]+$' OR d.point = 'migration')""",
                     c.get("ev.hours", 48), c.get("bandit.min_buyers_to_alert", 10))
                 rows = []
                 for r in rs:

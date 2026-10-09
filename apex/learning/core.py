@@ -101,6 +101,8 @@ class Learner:
 
     def on_decision(self, d: Decision) -> tuple[list[tuple], dict | None]:
         """Retourne (lignes de prédiction, alerte éventuelle)."""
+        if d.point not in self.bandit.points:
+            return [], None         # terrain en observation : étudié par le labeler, sans toucher aux modèles
         x = d.features
         self.last_decision_ts = time.time()
         preds: dict[str, dict[str, tuple[float, float]]] = {}

@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import re
 import statistics
+from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -66,6 +67,15 @@ class TokenState:
     peak_price: float = 0.0
     max_dd: float = 0.0
     migrated_ts: float | None = None
+    due: dict[str, float] = field(default_factory=dict)          # échéance de chaque point de décision
+    recent: deque = field(default_factory=deque)                   # (ts, trader, achat ?, prix) sur 15 min
+    seen_traders: set = field(default_factory=set)
+    last_wave_check: float = 0.0
+    amm_first_price: float | None = None
+    amm_peak: float = 0.0
+    amm_buy_sol: float = 0.0
+    amm_sell_sol: float = 0.0
+    amm_n: int = 0
     amm_price: float | None = None        # dernier prix PumpSwap/DexScreener (après migration)
     amm_ts: float | None = None
     amm_pool_sol: float | None = None
@@ -218,6 +228,13 @@ def compute_features(
         if m.get("sol_price_usd"):
             f["sol_price_usd"] = m["sol_price_usd"]
         f["narrative_score"] = market.narrative_score(tokenize_name(st.created.name, st.created.symbol), now)
+    # ---- après migration (PumpSwap) ----
+    if st.migrated_ts is not None and st.amm_price and st.amm_first_price:
+        f["amm_ret_since_mig"] = st.amm_price / st.amm_first_price - 1
+        f["amm_dd_peak"] = st.amm_price / st.amm_peak - 1 if st.amm_peak else 0.0
+        f["amm_buy_ratio"] = _safe_div(st.amm_buy_sol, st.amm_buy_sol + st.amm_sell_sol)
+        f["amm_n_trades"] = math.log1p(st.amm_n)
+        f["since_migration_s"] = now - st.migrated_ts
     f.update(meta_features(st.meta))
     hour = (now % 86400) / 3600
     f["hour_sin"] = math.sin(2 * math.pi * hour / 24)

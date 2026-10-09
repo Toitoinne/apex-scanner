@@ -90,3 +90,12 @@ def test_crash_precursors_are_visible_to_the_exit_model():
     prices = [1.0 + i / 100 for i in range(61)] + [1.6 - i / 20 for i in range(9)]
     x = ExitLearner.features(0.0, times, prices, max(prices), 69.0, prices[-1], False, d)
     assert x["from_peak300"] < -0.2 and "sell_share10" in x
+
+
+def test_learned_exit_only_used_when_better_than_chance():
+    ml = ExitLearner({"min_samples": 10})
+    ml.n_learned, ml.n_eval = 100, 1000
+    ml.ll_model, ml.ll_base = 120.0, 100.0               # se trompe plus que le taux de base
+    assert not ml.ready and ml.predict({"ret60": 0.1}) is None
+    ml.ll_model = 80.0                                   # meilleur que le hasard
+    assert ml.ready and ml.predict({"ret60": 0.1}) is not None
