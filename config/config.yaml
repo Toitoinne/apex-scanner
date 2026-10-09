@@ -21,6 +21,10 @@ ingestion:
   # Voie rapide : abonnement Helius (temps réel, complet) aux seuls tokens candidats / en position.
   # Mesuré : flux public ≈ 3 s de retard (p90 5,7 s) et ~15 % de transactions manquées ; Helius ≈ 0 s.
   fastlane: {enabled: true, daily_credits: 12000, max_mints: 20, max_candidates: 6}
+  # RPC public : coupe toutes les 1–2 min en perdant sa file (≈ 10 % de trades manqués par connexion) ;
+  # 2 connexions décalées par URL → 100 % vus (mesuré contre getBlock le 09/10). Gratuit.
+  connections_per_url: 2
+  connection_stagger_s: 20
   curve_tolerance: 0.02             # seuls les trades de la courbe SOL standard (k = 30 × 1,073 Md) sont acceptés
   watchdog:
     stall_s: 30                     # source muette 30 s → reconnexion forcée

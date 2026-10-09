@@ -50,6 +50,15 @@ class Deduper:
         return bool(await self.bus.r.set(f"apex:dedupe:{self.key(ev)}", b"1", nx=True, ex=self.ttl))
 
 
+def expand_ws_urls(urls: list[str], copies: int) -> list[str]:
+    """Le RPC public sature : il prend du retard puis coupe la connexion toutes les 1–2 min, et la
+    file en attente côté serveur est perdue (~10 % des trades par connexion, mesuré le 09/10).
+    Plusieurs connexions décalées vers la même URL ne coupent pas au même moment : leur union
+    (dédupliquée) voit tout. Ordre conservé : ws0 reste la 1re connexion de la 1re URL."""
+    copies = max(1, int(copies))
+    return [u for k in range(copies) for u in urls] if copies > 1 else list(urls)
+
+
 class Ingestor:
     def __init__(self, cfg: Config, bus: B.Bus):
         self.cfg, self.bus = cfg, bus
@@ -61,8 +70,10 @@ class Ingestor:
         self._t_start = time.time()
         self._pp_ws: Any = None
         self._ws: dict[str, Any] = {}
-        self.free_urls = [u.strip() for u in secrets().solana_ws_urls.split(",") if u.strip()] \
+        urls = [u.strip() for u in secrets().solana_ws_urls.split(",") if u.strip()] \
             if "public_logs" in ing["sources"] else []
+        self.free_urls = expand_ws_urls(urls, ing.get("connections_per_url", 1))
+        self.stagger_s = ing.get("connection_stagger_s", 20)
         wd = ing.get("watchdog", {})
         self.wd = FlowWatchdog(log_sources=[f"ws{i}" for i in range(len(self.free_urls))],
                                stall_s=wd.get("stall_s", 30), backup_after_s=wd.get("backup_after_s", 15),
@@ -82,8 +93,10 @@ class Ingestor:
         self.stats["events"] += 1
         await self.bus.publish(B.RAW, ev, maxlen=self.maxlen)
 
-    async def _forever(self, name: str, fn) -> None:
+    async def _forever(self, name: str, fn, delay: float = 0.0) -> None:
         attempt = 0
+        if delay:
+            await asyncio.sleep(delay)     # connexions de renfort décalées : elles ne coupent pas en même temps
         while True:
             started = time.time()
             try:
@@ -434,9 +447,11 @@ class Ingestor:
         tasks = [asyncio.create_task(self.stats_loop()), asyncio.create_task(self.watchdog_loop()),
                  asyncio.create_task(self.lag_loop())]
         srcs = self.cfg["ingestion"]["sources"]
+        n_urls = max(1, len(set(self.free_urls)))
         for i, url in enumerate(self.free_urls):
             name = f"ws{i}"
-            tasks.append(asyncio.create_task(self._forever(name, lambda u=url, n=name: self.logs_ws(u, n))))
+            tasks.append(asyncio.create_task(self._forever(name, lambda u=url, n=name: self.logs_ws(u, n),
+                                                           delay=(i // n_urls) * self.stagger_s)))
         if "helius_logs" in srcs and (secrets().helius_api_key or secrets().helius_ws_url):
             # ⚠ facturé 20 crédits/Mo : épuise vite l'offre gratuite avec le flux pump.fun complet
             tasks.append(asyncio.create_task(self._forever("helius", lambda: self.logs_ws(secrets().ws_url(), "helius"))))
