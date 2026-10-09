@@ -226,6 +226,13 @@ class Supervisor:
         ing = await self.bus.get_json("apex:ingestor:stats", {}) or {}
         health_ok = health.get("ok", True) and (ing.get("watchdog") or {}).get("healthy", True)
         verdict = R.evaluate(stats, crit, health_ok, recent.max_drawdown_stakes)
+        # trades RÉELS jugés à part : une dégradation propre au réel ne doit pas être noyée dans les simulations
+        real_rows = await self.db.fetch(
+            """SELECT extract(epoch from closed_at) t, pnl FROM exec_positions WHERE mode = 'reel'
+               AND status IN ('closed','failed') AND pnl IS NOT NULL AND closed_at IS NOT NULL""")
+        real_bad, real_txt = R.real_guard([R.Closed(float(r["t"]), float(r["pnl"])) for r in real_rows], crit)
+        if real_bad:
+            verdict.regress = True
         st = await self.bus.get_json("apex:trading:state") or {"state": R.LEARNING, "since": time.time()}
         since_v = None
         if st["state"] == R.SUSPENDED:
@@ -244,7 +251,8 @@ class Supervisor:
             await self.notify_now(self._trading_message(old, new, stats, verdict, since_v))
         status = {"state": st["state"], "since": st["since"], "source": source, "stats": stats.to_dict(), "recent50": recent.to_dict(),
                   "checks": {k: [ok, txt] for k, (ok, txt) in verdict.checks.items()}, "regress": verdict.regress,
-                  "live_enabled": live_enabled, "reinvest": self._reinvest_plan(stats, closed), "ts": time.time()}
+                  "live_enabled": live_enabled, "reinvest": self._reinvest_plan(stats, closed),
+                  "reel": {"n": len(real_rows), "garde_fou": real_txt, "suspension": real_bad}, "ts": time.time()}
         await self.bus.set_json("apex:trading:state", st)
         await self.bus.set_json("apex:trading:status", status)
         return events

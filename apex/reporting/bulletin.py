@@ -190,6 +190,11 @@ def render(d: dict, title: str) -> str:
                    "perd": "perd encore de l'argent"}.get(best["verdict"], "")
         lines.append(f"• Meilleure façon de revendre en ce moment ({best['n_testees']} testées) : {e(best['description'])} — "
                      f"{best['mean']:+.1%} par trade, {verdict} (/sorties)".replace(".", ",", 1))
+    evs = d.get("ev") or {}
+    if evs.get("auto_moyen") is not None:
+        lines.append("• Choix de la stratégie token par token : " + ("✅ ACTIF, il fait mieux qu'une stratégie unique"
+                     if evs.get("actif") else f"en observation (sur des tokens jamais vus : {evs['auto_moyen']:+.1%} par trade, "
+                     f"contre {evs['meilleure_fixe_moyen']:+.1%} pour la meilleure stratégie unique)").replace(".", ","))
     ex = d.get("exit_model") or {}
     if ex.get("situations_apprises"):
         if ex.get("pret") and ex.get("fiabilite") is not None:
@@ -260,6 +265,7 @@ async def gather(db: Any, bus: Any, cfg: Any, hours: int, record: bool = True) -
     board = await bus.get_json("apex:exits:board", {}) or {}
     sel = board.get("selection") or []
     d["best_exit"] = {**sel[0], "n_testees": len(board.get("toutes") or sel)} if sel else None
+    d["ev"] = await bus.get_json("apex:ev:stats", {}) or {}
     d["exit_model"] = ((await bus.get_json("apex:labeler:stats", {}) or {}).get("sortie_apprise") or {})
     d["problems"] = await health_problems(bus)
     return d

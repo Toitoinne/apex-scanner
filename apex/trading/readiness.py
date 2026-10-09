@@ -113,6 +113,18 @@ def evaluate(s: Stats, c: Criteria, health_ok: bool = True, recent_drawdown: flo
     return Verdict(ready=ready, regress=regress, checks=checks)
 
 
+def real_guard(real: list["Closed"], c: Criteria, min_n: int = 10, last: int = 20) -> tuple[bool, str]:
+    """Garde-fou propre aux trades RÉELS : s'ils perdent trop (glissement de prix pire que simulé,
+    exécution ratée…), on suspend même si les simulations vont bien — elles pourraient masquer le réel."""
+    if len(real) < min_n:
+        return False, f"{len(real)} trade(s) réel(s) : pas encore jugé"
+    recent = sorted(real, key=lambda r: r.t)[-last:]
+    mean = sum(r.pnl for r in recent) / len(recent)
+    if mean <= c.suspend_recent_return:
+        return True, f"les {len(recent)} derniers trades réels perdent {mean:+.0%} en moyenne"
+    return False, f"{len(recent)} derniers trades réels : {mean:+.0%} en moyenne"
+
+
 def next_state(state: str, all_time: Verdict, since_suspension: Verdict | None, live_enabled: bool) -> str:
     """Transition d'état. `since_suspension` = verdict calculé sur les seules positions postérieures
     à la dernière suspension (la reprise doit être prouvée sur des données récentes)."""

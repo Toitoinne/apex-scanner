@@ -47,3 +47,15 @@ def test_unhealthy_learning_blocks_and_suspends():
     s = R.compute_stats(series(150, 0.25, sd=0.5, days=9))
     v = R.evaluate(s, R.Criteria(), health_ok=False)
     assert not v.ready and v.regress
+
+
+def test_real_trades_are_judged_separately():
+    from apex.trading.readiness import Closed, Criteria, real_guard
+    c = Criteria()
+    few = [Closed(float(i), -0.5) for i in range(5)]
+    assert real_guard(few, c)[0] is False                          # trop peu de trades réels pour juger
+    bad = [Closed(float(i), 0.3) for i in range(20)] + [Closed(100.0 + i, -0.3) for i in range(20)]
+    stop, why = real_guard(bad, c)
+    assert stop and "derniers trades réels" in why                  # les 20 derniers perdent : suspension
+    good = [Closed(float(i), 0.05) for i in range(30)]
+    assert real_guard(good, c)[0] is False
