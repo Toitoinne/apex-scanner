@@ -196,6 +196,7 @@ models:
     GAGNANT_DETECTE_TROP_TARD: 2.0
     AUTRE: 1.5
   positive_class_weight: 3.0
+  non_alertable_weight: 0.2       # LightGBM : poids des décisions non alertables (le tri utile est sur les alertables)
   max_sample_weight: 10.0
 
 calibration:

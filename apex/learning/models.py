@@ -135,12 +135,17 @@ class Competitor:
         raw = self.predict_raw(x)
         return raw, self.calibrator.transform(raw)
 
-    def evaluate(self, p_raw: float, y: int, p_cal: float | None = None) -> float:
+    def evaluate(self, p_raw: float, y: int, p_cal: float | None = None, focus: bool = True) -> float:
         """Note la probabilité réellement utilisée (calibrée). Les modèles apprennent avec des
         poids (gagnants, erreurs coûteuses) qui gonflent leur proba brute : la noter les
-        pénaliserait injustement face à un modèle non pondéré."""
+        pénaliserait injustement face à un modèle non pondéré.
+        focus=False (décision non alertable) : la perte est calculée (suivi) mais ne compte ni pour
+        le choix du champion ni pour le recalage des probabilités — seules comptent les décisions
+        qui peuvent réellement donner une alerte."""
         p_used = p_raw if p_cal is None else p_cal
         ll = logloss(p_used, y)
+        if not focus:
+            return ll
         self.losses.append(ll)
         self.hits.append(int((p_used >= 0.5) == bool(y)))
         self.n_evaluated += 1

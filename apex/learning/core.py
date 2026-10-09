@@ -224,7 +224,7 @@ class Learner:
         preds = st["preds"].get(lb.horizon, {})
         champ = st["champions"].get(lb.horizon)
         w_by = {cid: self.sample_weight(lb.y, None, c.spec) for cid, c in ens.competitors.items()}
-        losses = ens.evaluate_and_learn(x, lb.y, dict(preds), w_by, lb.ts)
+        losses = ens.evaluate_and_learn(x, lb.y, dict(preds), w_by, lb.ts, focus=st.get("eligible", True))
         for cid, loss in losses.items():
             if cid == champ:
                 res.evaluations.append((lb.decision_id, lb.horizon, cid, True, preds[cid][1], lb.y, loss, None, None))
@@ -269,7 +269,7 @@ class Learner:
                 res.alert_result = {"decision_id": lb.decision_id, "pnl": lb.sim_pnl, "y": lb.y, "horizon": lb.horizon,
                                     "max_return": lb.max_return, "error_type": err.error_type if err else None}
         w_by = {cid: self.sample_weight(lb.y, err, c.spec) for cid, c in ens.competitors.items()}
-        losses = ens.evaluate_and_learn(x, lb.y, dict(preds), w_by, lb.ts)
+        losses = ens.evaluate_and_learn(x, lb.y, dict(preds), w_by, lb.ts, focus=self.alertable(dc.d))
         record_all = lb.horizon == self.primary
         for cid, loss in losses.items():
             if record_all or cid == champ:
@@ -326,9 +326,18 @@ class Learner:
         return events
 
     # ------------------------------------------------------------------
+    def alertable(self, d: Any) -> bool:
+        """Décision qui peut réellement donner une alerte (non bloquée, assez d'acheteurs)."""
+        return not d.blocked and d.features.get("unique_buyers", 0) >= self.cfg.get("bandit.min_buyers_to_alert", 10)
+
     def lgbm_rows(self, horizon: str, window: int | None = None) -> list[tuple[dict, int, float]]:
+        """Fenêtre récente ; les décisions NON alertables gardent un poids réduit (on apprend surtout
+        à trier les tokens qui peuvent donner une alerte, sans jeter le reste de l'information)."""
         w = window or self.cfg.get("models.lgbm_window", 50000)
-        return [(x, y, wt) for x, y, wt, _ in list(self.ensembles[horizon].replay)[-w:]]
+        mb = self.cfg.get("bandit.min_buyers_to_alert", 10)
+        other = self.cfg.get("models.non_alertable_weight", 0.2)
+        return [(x, y, wt if x.get("unique_buyers", 0) >= mb else wt * other)
+                for x, y, wt, _ in list(self.ensembles[horizon].replay)[-w:]]
 
     def install_lgbm(self, horizon: str, booster: Any, feats: list[str], cid: str | None = None) -> str:
         ens = self.ensembles[horizon]

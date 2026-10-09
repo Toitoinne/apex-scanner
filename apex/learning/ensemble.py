@@ -95,7 +95,8 @@ class HorizonEnsemble:
                 # recréé à chaud sur le buffer récent (pas de redémarrage à froid)
                 self.add(CompetitorSpec(**{**spec.to_dict(), "params": params}), warm_start=True)
 
-    def evaluate_and_learn(self, x: dict, y: int, preds: dict, w_by_comp: dict[str, float], ts: float) -> dict[str, float]:
+    def evaluate_and_learn(self, x: dict, y: int, preds: dict, w_by_comp: dict[str, float], ts: float,
+                           focus: bool = True) -> dict[str, float]:
         """preds = (p_raw, p_cal) — ou p_raw seul — de chaque concurrent AU MOMENT DE LA DÉCISION."""
         losses = {}
         for cid, c in self.competitors.items():
@@ -104,7 +105,7 @@ class HorizonEnsemble:
             if cid in preds:
                 raw, cal = preds[cid] if isinstance(preds[cid], tuple) else (preds[cid], None)
                 if raw != 0.5 or cid == self.champion_id:
-                    losses[cid] = c.evaluate(raw, y, cal)
+                    losses[cid] = c.evaluate(raw, y, cal, focus)
             c.learn(x, y, w_by_comp.get(cid, 1.0))
         self.replay.append((x, y, w_by_comp.get(self.champion_id or "", 1.0), ts))
         return losses

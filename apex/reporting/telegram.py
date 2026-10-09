@@ -17,6 +17,7 @@ from ..db import DB
 from ..errors.classifier import DISPLAY
 from . import bulletin as BU
 from . import exit_board as EB
+from . import entry_audit as EA
 
 log = logging.getLogger("notifier")
 GROUP = "notifier"
@@ -180,6 +181,8 @@ class Notifier:
             return BU.GLOSSAIRE
         if cmd == "/bilan":
             return BU.render(await BU.gather(db, self.bus, self.cfg, 6, record=False), "point à la demande")
+        if cmd in ("/entree", "/entrée"):
+            return EA.render(await self.bus.get_json("apex:entry:audit", {}) or {})
         if cmd in ("/sorties", "/sortie"):
             b = await self.bus.get_json("apex:exits:board", {}) or {}
             return EB.render(b) if b.get("selection") or b.get("toutes") else "Classement pas encore calculé (toutes les heures)."
@@ -316,7 +319,7 @@ class Notifier:
         if cmd in ("/pause", "/reprendre"):
             await self.bus.publish(B.CONTROL, {"op": "pause", "value": cmd == "/pause", "cmd_id": uuid.uuid4().hex})
             return "⏸ Alertes en pause (l'apprentissage continue)." if cmd == "/pause" else "▶️ Alertes reprises."
-        return ("Commandes simples : /bilan (le point maintenant) · /sorties (classement des façons de revendre) · /trading (avant l'argent réel) · /paper (trades simulés) "
+        return ("Commandes simples : /bilan (le point maintenant) · /sorties (classement des façons de revendre) · /entree (audit de l'entrée) · /trading (avant l'argent réel) · /paper (trades simulés) "
                 "· /aide (lexique)\nTechniques : /tech /stats /top /seuil /erreurs /etat /corrections /model /features /ordres\n"
                 "Alertes : /pause /reprendre · trading réel : /activer /stop")
 

@@ -24,6 +24,7 @@ from ..config import Config, secrets
 from ..db import DB
 from ..reporting import bulletin as BU
 from ..reporting import exit_board as EB
+from ..reporting import entry_audit as EA
 from ..trading import evolve as EV
 from ..trading.exits import build_panel
 from ..reporting.reports import Reporter
@@ -584,6 +585,7 @@ class Supervisor:
         last_claude_check = 0.0
         last_report = 0.0
         last_board = 0.0
+        last_entry_audit = 0.0
         while True:
             try:
                 await self.cycle()
@@ -607,6 +609,13 @@ class Supervisor:
                 await self.bus.r.set("apex:report:tech", await self.reporter.build(6))
                 last_report = now
             await self.bulletin_if_due()
+            # audit de l'entrée (quels indices prédisent, calibration) : toutes les 6 h
+            if now - last_entry_audit >= 21600:
+                last_entry_audit = now
+                try:
+                    await self.bus.set_json("apex:entry:audit", await EA.run(self.db, self.cfg, 48))
+                except Exception:  # noqa: BLE001
+                    log.exception("audit de l'entrée")
             # classement des stratégies de sortie (marge d'incertitude, stabilité) : toutes les heures
             if now - last_board >= 3600:
                 last_board = now
