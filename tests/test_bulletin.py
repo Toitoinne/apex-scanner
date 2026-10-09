@@ -53,3 +53,12 @@ def test_alert_message_is_plain():
     txt = fmt_alert(a)
     assert "Simulation : aucun achat réel" in txt and "30 s après son lancement" in txt
     assert "beaucoup d'acheteurs différents" in txt and "x2 en 1 h : 34%" in txt
+
+
+def test_data_audit_verdict():
+    from apex.reporting.data_audit import verdict
+    good = {"fraicheur_s": 1.5, "prix_ecart_median_pct": 0.0, "prix_n": 6, "completude_pct": 100.0,
+            "completude_vues": 787, "completude_total": 787, "pumpswap_ecart_median_pct": 0.3}
+    assert verdict(good).startswith("✅") and "100 % des transactions vues (787/787)" in verdict(good)
+    assert verdict({**good, "completude_pct": 80.0}).startswith("⚠️")
+    assert verdict({**good, "fraicheur_s": 120}).startswith("⚠️")
