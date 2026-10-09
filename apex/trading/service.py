@@ -157,10 +157,21 @@ class TraderService:
         await self.record(o, f, r.signature, r.latency_s)
 
     async def step_loop(self) -> None:
+        last_sync = 0.0
         while True:
             for o, f in self.engine.step(time.time()):
                 await self.record(o, f)
             self.engine.forget_closed()
+            if time.time() - last_sync > 60:          # positions orphelines (signal manqué pendant un redémarrage)
+                last_sync = time.time()
+                try:
+                    opened = [d for d, p in self.engine.positions.items() if p.status == "open"]
+                    if opened:
+                        rows = await self.db.fetch("SELECT decision_id FROM paper_positions WHERE status='closed' "
+                                                   "AND decision_id = ANY($1)", opened)
+                        self.engine.orphans({r["decision_id"] for r in rows})
+                except Exception:  # noqa: BLE001
+                    log.exception("synchronisation des positions")
             await asyncio.sleep(0.25)
 
     # ---------------- persistance / notifications ----------------
@@ -201,7 +212,8 @@ class TraderService:
         for r in await self.db.fetch("SELECT * FROM exec_positions WHERE status IN ('open','pending')"):
             self.engine.positions[r["decision_id"]] = Position(
                 r["decision_id"], r["mint"], r["mode"], r["symbol"] or "", r["policy"] or "", r["opened_at"].timestamp(),
-                r["sol_in"], r["sol_out"], r["tokens_initial"], r["tokens"], "open" if r["tokens"] > 0 else r["status"])
+                r["sol_in"], r["sol_out"], r["tokens_initial"], r["tokens"], "open" if r["tokens"] > 0 else r["status"],
+                stake=self.engine.limits.sol_per_trade)
             self.engine._watch(r["mint"], None)
 
     async def stats_loop(self) -> None:

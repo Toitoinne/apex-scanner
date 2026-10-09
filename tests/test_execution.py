@@ -129,3 +129,38 @@ def test_feed_lag_delays_simulated_execution():
     o2, _ = eng.open({**alert, "decision_id": "N:30", "mint": "N"}, REAL, 100.0, killed=False, realized_today_sol=0,
                      trades_today=0)
     assert o2.execute_at == 100.0          # en réel : envoyé tout de suite
+
+
+def test_failed_buy_costs_only_fees():
+    from apex.trading.engine import Position
+    p = Position("D", "M", SIM, stake=0.1, sol_in=0.0005, status="failed")
+    assert abs(p.pnl() + 0.005) < 1e-9          # −0,5 % de la mise, pas −100 %
+
+
+def test_sell_never_uses_a_price_from_before_the_crash():
+    """Plus aucun échange reçu par le simulateur pendant l'effondrement : le signal de vente apporte le
+    dernier prix vu par le bot, et la vente simulée se fait à ce prix-là."""
+    eng = TraderEngine(limits=Limits(sol_per_trade=0.1), latency_s=2.0)
+    alert = {"decision_id": "M:30", "mint": "M", "ts": 100.0, "entry_price": VS / VT * 1.02, "v_sol": VS, "v_tokens": VT,
+             "symbol": "M", "policy": "TP2_SL50"}
+    eng.open(alert, SIM, 100.0, killed=False, realized_today_sol=0, trades_today=0)
+    eng.on_market("M", Market(ts=101.0, price=VS / VT, v_sol=VS, v_tokens=VT))
+    eng.step(120.0)
+    p = eng.positions["M:30"]
+    assert p.status == "open"
+    crash = VS / VT * 0.3                          # −70 %, vu par le bot mais pas par le simulateur
+    eng.on_signal({"decision_id": "M:30", "closed": True, "kind": "STOP", "price": crash}, 400.0)
+    eng.step(420.0)
+    assert p.status == "closed" and p.pnl() < -0.6  # vendu après la chute, pas au prix d'avant
+
+
+def test_orphan_positions_are_closed():
+    eng = TraderEngine(limits=Limits(sol_per_trade=0.1), latency_s=2.0)
+    alert = {"decision_id": "M:30", "mint": "M", "ts": 100.0, "entry_price": VS / VT * 1.02, "v_sol": VS, "v_tokens": VT,
+             "symbol": "M", "policy": "TP2_SL50"}
+    eng.open(alert, SIM, 100.0, killed=False, realized_today_sol=0, trades_today=0)
+    eng.on_market("M", Market(ts=101.0, price=VS / VT, v_sol=VS, v_tokens=VT))
+    eng.step(120.0)
+    assert eng.orphans(set()) == []
+    orders = eng.orphans({"M:30"})                 # l'entraînement est clôturé : on vend
+    assert len(orders) == 1 and orders[0].side == "sell"

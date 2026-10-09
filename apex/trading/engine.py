@@ -4,6 +4,7 @@ Le mode réel passe par le service (LiveVenue) ; la comptabilité des positions 
 from __future__ import annotations
 
 import itertools
+import time
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -47,8 +48,13 @@ class Position:
     def pnl_sol(self) -> float:
         return self.sol_out - self.sol_in
 
+    stake: float = 0.0          # mise prévue (sert de base au PnL d'un achat raté)
+
     def pnl(self, price: float = 0.0) -> float:
         """PnL réalisé + latent (au prix donné), en fraction de la mise."""
+        if self.status == "failed" and self.tokens_initial <= 0:
+            # achat raté : seuls les frais réseau sont perdus, rapportés à la mise prévue (et non −100 %)
+            return -(self.sol_in - self.sol_out) / (self.stake or 0.1)
         if self.sol_in <= 0:
             return 0.0
         return (self.sol_out + self.tokens * price - self.sol_in) / self.sol_in
@@ -108,7 +114,8 @@ class TraderEngine:
             seed = Market(ts=alert["ts"], price=alert["v_sol"] / alert["v_tokens"], v_sol=alert["v_sol"],
                           v_tokens=alert["v_tokens"], migrated=bool(alert.get("migrated")))
         self._watch(alert["mint"], seed)
-        self.positions[did] = Position(did, alert["mint"], mode, alert.get("symbol") or "", alert.get("policy") or "", now)
+        self.positions[did] = Position(did, alert["mint"], mode, alert.get("symbol") or "", alert.get("policy") or "", now,
+                                       stake=self.limits.sol_per_trade)
         o = Order(next(self._ids), did, alert["mint"], "buy", mode, "alerte", alert.get("entry_price") or 0.0,
                   now, now + (self.latency_s + self.feed_lag_s if mode == SIM else 0.0), sol=self.limits.sol_per_trade)
         self.pending.append(o)
@@ -121,10 +128,40 @@ class TraderEngine:
         qty = p.tokens if sig.get("closed") else min(p.tokens, sig.get("fraction", 0.0) * p.tokens_initial)
         if qty <= 0:
             return None
+        self.observe_signal_price(p.mint, float(sig.get("price") or 0.0), now)
         o = Order(next(self._ids), p.decision_id, p.mint, "sell", p.mode, sig.get("kind", "VENTE"),
                   sig.get("price") or 0.0, now, now + (self.latency_s + self.feed_lag_s if p.mode == SIM else 0.0), tokens=qty)
         self.pending.append(o)
         return o
+
+    def observe_signal_price(self, mint: str, price: float, now: float, stale_s: float = 20.0) -> None:
+        """Le signal de vente porte le dernier prix vu par le bot. Si le relevé du simulateur est plus ancien
+        (token qui ne s'échange presque plus, souvent pendant un effondrement), on l'ajoute : sinon la vente
+        simulée se ferait sur un prix d'avant la chute (résultats trop beaux)."""
+        if price <= 0:
+            return
+        dq = self.market.get(mint)
+        last = dq[-1] if dq else None
+        if last is not None and now - last.ts <= stale_s and abs(last.price / price - 1) < 0.2:
+            return
+        if last is not None and last.migrated:
+            m = Market(ts=now, price=price, pool_sol=last.pool_sol, migrated=True)
+        else:                                  # courbe : réserves virtuelles cohérentes avec ce prix (k constant)
+            k = (last.v_sol * last.v_tokens) if last is not None and last.v_sol and last.v_tokens else 30.0 * 1.073e9
+            m = Market(ts=now, price=price, v_sol=(k * price) ** 0.5, v_tokens=(k / price) ** 0.5)
+        self.on_market(mint, m)
+
+    def orphans(self, closed_paper: set[str]) -> list[Order]:
+        """Positions simulées dont le trade d'entraînement correspondant est clôturé (signal de vente passé
+        pendant un redémarrage) : vendues au marché, sinon elles restent ouvertes indéfiniment."""
+        out = []
+        busy = {o.decision_id for o in self.pending}
+        for p in self.positions.values():
+            if p.mode == SIM and p.status == "open" and p.tokens > 0 and p.decision_id in closed_paper \
+                    and p.decision_id not in busy:
+                out.append(self.on_signal({"decision_id": p.decision_id, "closed": True, "kind": "SYNCHRO",
+                                           "price": self.last_price(p.mint)}, time.time()))
+        return [o for o in out if o is not None]
 
     # ---------------- exécution simulée ----------------
     def step(self, now: float) -> list[tuple[Order, Fill]]:
