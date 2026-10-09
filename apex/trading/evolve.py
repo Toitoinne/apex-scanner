@@ -23,6 +23,15 @@ LABELS = {"stop_loss": "stop", "trail": "stop suiveur", "trail_activate": "suive
           "min_hold_s": "attente minimale"}
 
 
+def readable(k: str, v: float) -> str:
+    """Réglage en langage simple (pour les descriptions affichées sur Telegram)."""
+    txt = {"stop_loss": f"stop −{v:.0%}", "trail": f"stop suiveur −{v:.0%}", "trail_activate": f"suiveur dès x{v:.2f}",
+           "time_stop_s": f"délai {v / 60:.0f} min", "time_stop_mult": f"hausse exigée +{v:.0%}",
+           "hold_threshold": f"vend si chances de hausse < {v:.0%}", "breakeven_at": f"sécurise la mise dès x{v:.2f}",
+           "min_hold_s": f"attend au moins {v:.0f} s"}[k]
+    return txt.replace(".", ",")
+
+
 def _clip(k: str, v: float) -> float:
     lo, hi = BOUNDS[k]
     return round(min(hi, max(lo, v)), 3 if k not in ("time_stop_s", "min_hold_s") else 0)
@@ -42,10 +51,10 @@ def mutate(cfg: dict, rng: random.Random, strength: float = 0.25) -> tuple[dict,
             m = round(max(1.1, c["take_profits"][i][0] * f), 2)
             c["take_profits"][i][0] = m
             c["take_profits"].sort(key=lambda x: x[0])
-            changes.append(f"palier x{m:g}")
+            changes.append(f"palier à x{m:g}".replace(".", ","))
         else:
             c[k] = _clip(k, c[k] * f)
-            changes.append(f"{LABELS[k]} {c[k]:g}")
+            changes.append(readable(k, c[k]))
     return c, changes
 
 
