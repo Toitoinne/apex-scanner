@@ -281,8 +281,7 @@ class Supervisor:
         head = {
             R.READY: "🟢 <b>APEX est PRÊT à trader en réel</b> (selon ses critères).\n"
                      "Il a prouvé sa rentabilité en paper trading, frais et slippage compris. "
-                     "Le trading réel n'est PAS encore actif : réponds-moi pour l'activer avec ton portefeuille et tes limites.
-"
+                     "Le trading réel n'est PAS encore actif : réponds-moi pour l'activer avec ton portefeuille et tes limites.\n"
                      "📌 Étape prévue avant l'argent réel : brancher un flux de données rapide (gRPC Yellowstone, "
                      "Alchemy en paiement à l'usage, ~25–45 €/mois) — le flux gratuit a jusqu'à 10–60 s de retard aux heures de pointe.",
             R.LIVE: "🚀 <b>Trading réel ACTIF.</b>",
