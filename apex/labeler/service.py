@@ -265,11 +265,15 @@ class LabelerService:
                 for dt_, price in ((5, r["low"]), (30, r["high"]), (55, r["close"])):
                     if price:
                         events[r["mint"]].append((b + dt_, 1, PriceTick(mint=r["mint"], ts=b + dt_, price=price, source="candle")))
+            # prix après migration regroupés par tranches de 10 s (bas → haut → dernier, ordre prudent) :
+            # des millions de relevés PumpSwap à la seconde rendaient la reprise trop lente (> 4 min)
             for r in await self.db.fetch(
-                    """SELECT ts, mint, price FROM price_ticks WHERE mint = ANY($1)
-                       AND ts > now() - interval '25 hours' AND ts < to_timestamp($2)""", chunk, cutoff):
-                t = r["ts"].timestamp()
-                events[r["mint"]].append((t, 1, PriceTick(mint=r["mint"], ts=t, price=r["price"], source="replay")))
+                    """SELECT time_bucket('10 seconds', ts) b, mint, min(price) low, max(price) high, last(price, ts) close
+                       FROM price_ticks WHERE mint = ANY($1)
+                       AND ts > now() - interval '25 hours' AND ts < to_timestamp($2) GROUP BY 1, 2""", chunk, cutoff):
+                b = r["b"].timestamp()
+                for dt_, price in ((2, r["low"]), (5, r["high"]), (8, r["close"])):
+                    events[r["mint"]].append((b + dt_, 1, PriceTick(mint=r["mint"], ts=b + dt_, price=price, source="replay")))
         for r in decs:
             t = r["ts"].timestamp()
             events[r["mint"]].append((t, 2, Decision(
@@ -283,7 +287,12 @@ class LabelerService:
         return len(decs)
 
     async def run(self) -> None:
-        await self.rebuild()
+        # signal de vie pendant la reprise (sinon le contrôle de santé croit le labeler en panne)
+        hb = asyncio.create_task(B.heartbeat_loop(self.bus, "labeler"))
+        try:
+            await self.rebuild()
+        finally:
+            hb.cancel()
         await asyncio.gather(
             B.resilient("consume", lambda first: self.consume(first)),
             B.resilient("tick", lambda _: self.tick_loop()),
