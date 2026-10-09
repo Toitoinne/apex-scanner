@@ -88,6 +88,7 @@ class TraderService:
                 elif stream == B.ALERTS:
                     await self.on_alert(ev)
                 elif stream == B.SIGNALS:
+                    await self.refresh_feed_lag()
                     o = self.engine.on_signal(ev, time.time())
                     if o is not None and o.mode == REAL:
                         await self.execute_live(o)
@@ -101,7 +102,15 @@ class TraderService:
         elif isinstance(ev, PriceTick) and self.engine.watching(ev.mint):
             self.engine.on_market(ev.mint, Market(ev.ts, ev.price, pool_sol=getattr(ev, "pool_sol", None), migrated=True))
 
+    async def refresh_feed_lag(self) -> None:
+        """Le bot voit le marché avec le retard du flux : un vrai ordre arriverait d'autant plus tard.
+        La simulation exécute donc au prix du moment où l'ordre serait VRAIMENT arrivé."""
+        lag = await self.bus.get_json("apex:feed:lag", {}) or {}
+        fresh = time.time() - lag.get("ts", 0) < 120
+        self.engine.feed_lag_s = min(60.0, float(lag.get("moyen_5min", 0.0))) if fresh else 0.0
+
     async def on_alert(self, alert: dict) -> None:
+        await self.refresh_feed_lag()
         mode, why = await self.mode_now()
         realized, n_today = await self.today(mode)
         wallet = None

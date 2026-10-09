@@ -127,6 +127,7 @@ class Ingestor:
                     val = res["value"]
                     if val.get("err") is not None:
                         continue
+                    self.last_slot = max(getattr(self, "last_slot", 0), res["context"]["slot"])
                     for ev in events_from_logs(val.get("logs") or [], val["signature"], res["context"]["slot"], now):
                         self.wd.on_event(name, now, isinstance(ev, TokenCreated))
                         await self.emit(ev)
@@ -404,8 +405,34 @@ class Ingestor:
             except Exception:  # noqa: BLE001
                 log.exception("chien de garde")
 
+    async def lag_loop(self) -> None:
+        """Retard réel du flux : dernier bloc reçu vs dernier bloc de la blockchain (getSlot, gratuit,
+        toutes les 15 s). Les serveurs publics gratuits saturent aux heures de pointe : le système
+        d'ordres simulé ajoute ce retard pour que ses résultats restent honnêtes."""
+        import collections
+        import httpx
+        rpc = (self.free_urls[0] if self.free_urls else "wss://api.mainnet-beta.solana.com").replace("wss://", "https://")
+        samples: collections.deque = collections.deque(maxlen=20)        # 5 min
+        async with httpx.AsyncClient(timeout=10) as c:
+            while True:
+                await asyncio.sleep(15)
+                try:
+                    if not getattr(self, "last_slot", 0):
+                        continue
+                    r = await c.post(rpc, json={"jsonrpc": "2.0", "id": 1, "method": "getSlot",
+                                                "params": [{"commitment": "processed"}]})
+                    lag = max(0.0, (r.json()["result"] - self.last_slot) * 0.4)
+                    samples.append(lag)
+                    info = {"actuel": round(lag, 1), "moyen_5min": round(sum(samples) / len(samples), 1),
+                            "max_5min": round(max(samples), 1), "ts": time.time()}
+                    self.stats["retard_flux_s"] = info
+                    await self.bus.set_json("apex:feed:lag", info)
+                except Exception:  # noqa: BLE001
+                    log.debug("mesure du retard du flux impossible", exc_info=True)
+
     async def run(self) -> None:
-        tasks = [asyncio.create_task(self.stats_loop()), asyncio.create_task(self.watchdog_loop())]
+        tasks = [asyncio.create_task(self.stats_loop()), asyncio.create_task(self.watchdog_loop()),
+                 asyncio.create_task(self.lag_loop())]
         srcs = self.cfg["ingestion"]["sources"]
         for i, url in enumerate(self.free_urls):
             name = f"ws{i}"

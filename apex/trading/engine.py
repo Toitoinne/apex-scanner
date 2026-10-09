@@ -59,6 +59,7 @@ class TraderEngine:
     limits: Limits = field(default_factory=Limits)
     fees: Fees = field(default_factory=Fees)
     latency_s: float = 2.0
+    feed_lag_s: float = 0.0          # retard mesuré du flux de données (ajouté au délai en simulation)
     max_buy_slippage: float = 0.15
     sell_slippages: tuple[float, ...] = (0.15, 0.30, 0.60, 1.0)
     max_wait_s: float = 15.0
@@ -109,7 +110,7 @@ class TraderEngine:
         self._watch(alert["mint"], seed)
         self.positions[did] = Position(did, alert["mint"], mode, alert.get("symbol") or "", alert.get("policy") or "", now)
         o = Order(next(self._ids), did, alert["mint"], "buy", mode, "alerte", alert.get("entry_price") or 0.0,
-                  now, now + (self.latency_s if mode == SIM else 0.0), sol=self.limits.sol_per_trade)
+                  now, now + (self.latency_s + self.feed_lag_s if mode == SIM else 0.0), sol=self.limits.sol_per_trade)
         self.pending.append(o)
         return o, ""
 
@@ -121,7 +122,7 @@ class TraderEngine:
         if qty <= 0:
             return None
         o = Order(next(self._ids), p.decision_id, p.mint, "sell", p.mode, sig.get("kind", "VENTE"),
-                  sig.get("price") or 0.0, now, now + (self.latency_s if p.mode == SIM else 0.0), tokens=qty)
+                  sig.get("price") or 0.0, now, now + (self.latency_s + self.feed_lag_s if p.mode == SIM else 0.0), tokens=qty)
         self.pending.append(o)
         return o
 

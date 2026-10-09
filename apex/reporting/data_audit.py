@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import random
 import statistics
 import struct
 import time
@@ -96,7 +97,8 @@ async def audit() -> dict:
                WHERE ts BETWEEN to_timestamp($1) AND to_timestamp($2) GROUP BY mint
                HAVING count(*) BETWEEN 15 AND 300 ORDER BY count(*) DESC LIMIT 3) t JOIN tokens k USING (mint)
                WHERE k.bonding_curve <> ''""", t0, t1)
-        seen = total = 0
+        seen = 0
+        absent: list[str] = []
         delays = []
         for r in rows:
             sigs = await rpc(c, "getSignaturesForAddress", [r["bonding_curve"], {"limit": 1000, "commitment": "confirmed"}]) or []
@@ -109,10 +111,19 @@ async def audit() -> dict:
                     continue
                 if s["signature"] in bot:
                     seen += 1
-                    total += 1
                     delays.append(bot[s["signature"]] - s["blockTime"])
-                elif await is_trade(c, s["signature"]):      # absent : on ne compte que les vrais achats/ventes
-                    total += 1
+                else:
+                    absent.append(s["signature"])
+        # transactions absentes : la plupart ne sont pas des trades (robots qui LISENT la courbe). On en examine
+        # un échantillon (au plus 30) pour estimer la part de vrais achats/ventes manqués (sinon l'audit
+        # dépassait 5 minutes quand ces robots sont nombreux)
+        sample = random.Random(0).sample(absent, min(len(absent), 30))
+        trades_in_sample = 0
+        for sig in sample:
+            trades_in_sample += await is_trade(c, sig)
+        missed = round(len(absent) * trades_in_sample / len(sample)) if sample else 0
+        total = seen + missed
+        out["absentes_non_trades_estimees"] = len(absent) - missed
         if total:
             out.update(completude_pct=round(100 * seen / total, 1), completude_vues=seen, completude_total=total)
         if delays:

@@ -302,6 +302,10 @@ async def health_problems(bus: Any) -> list[str]:
     wd = ((await bus.get_json("apex:ingestor:stats", {}) or {}).get("watchdog") or {})
     if wd and not wd.get("healthy", True):
         out.append("La réception des données de la blockchain est perturbée (le secours prend le relais)")
+    lag = await bus.get_json("apex:feed:lag", {}) or {}
+    if lag.get("moyen_5min", 0) > 10 and time.time() - lag.get("ts", 0) < 300:
+        out.append(f"Les données gratuites arrivent avec ~{lag['moyen_5min']:.0f} s de retard (serveurs publics saturés) : "
+                   "le bot en tient compte dans ses simulations")
     c = await bus.get_json("apex:claude:status", {}) or {}
     if c and not c.get("ok", True):
         out.append("Plus de crédit sur l'API Claude : recharge sur console.anthropic.com"

@@ -115,3 +115,17 @@ def test_live_mode_requires_every_condition():
     assert asyncio.run(mode(True, "ACTIF", {}, True)) == SIM           # pas activé par l'utilisateur
     assert asyncio.run(mode(True, "ACTIF", ok, False)) == SIM          # pas de portefeuille
     assert asyncio.run(mode(True, "ACTIF", {**ok, "apex:trading:killed": "1"}, True)) == SIM   # /stop
+
+
+def test_feed_lag_delays_simulated_execution():
+    """Si le bot voit le marché avec 8 s de retard, un vrai ordre arriverait 8 s plus tard : la simulation
+    exécute à ce moment-là (et pas au prix que le bot croyait)."""
+    eng = TraderEngine(limits=Limits(sol_per_trade=0.1), latency_s=2.0)
+    eng.feed_lag_s = 8.0
+    alert = {"decision_id": "M:30", "mint": "M", "ts": 100.0, "entry_price": VS / VT * 1.02, "v_sol": VS, "v_tokens": VT,
+             "symbol": "M", "policy": "RECUP_TRAIL40"}
+    o, _ = eng.open(alert, SIM, 100.0, killed=False, realized_today_sol=0, trades_today=0)
+    assert o.execute_at == 110.0
+    o2, _ = eng.open({**alert, "decision_id": "N:30", "mint": "N"}, REAL, 100.0, killed=False, realized_today_sol=0,
+                     trades_today=0)
+    assert o2.execute_at == 100.0          # en réel : envoyé tout de suite
