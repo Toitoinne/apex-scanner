@@ -84,3 +84,12 @@ def test_board_is_honest():
     assert r["MAUVAIS"]["verdict"] == "perd"
     txt = render({"selection": rank(rows, top_k=2), "toutes": rows, "heures": 48})
     assert "1 stratégie(s) gagnent de façon prouvée" in txt and "+8,0% par trade" in txt
+
+
+def test_sorties_message_with_stored_board():
+    """/sorties : le classement relu depuis Redis contient des nombres sous forme de texte (ex. win)."""
+    from apex.reporting import exit_board as EB
+    r = {"pol": "TP2_SL50", "description": "x", "rang": 1, "n": 100, "mean": -0.1, "lo": "-0.12", "hi": -0.08,
+         "win": "0.17662973460448338057", "h1": None, "h2": -0.1, "verdict": "perd"}
+    msg = EB.render({"selection": [r], "toutes": [r], "heures": 48, "terrains": {"mig60": [r]}})
+    assert "18% gagnants" in msg

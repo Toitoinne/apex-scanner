@@ -31,7 +31,7 @@ top AS (
     AND p.p_cal >= (SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY p_cal) FROM predictions
                     WHERE is_champion AND horizon = $3 AND ts > now() - make_interval(hours => $1 + 24)))
 SELECT pol, count(*) n, avg(least(pnl, 20)) mean, stddev_samp(least(pnl, 20)) sd,
-       percentile_cont(0.5) WITHIN GROUP (ORDER BY pnl) med, avg((pnl > 0)::int) win,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY pnl) med, avg((pnl > 0)::int)::float8 win,
        avg(least(pnl, 20)) FILTER (WHERE o.ts < (SELECT m FROM mid)) h1,
        avg(least(pnl, 20)) FILTER (WHERE o.ts >= (SELECT m FROM mid)) h2
 FROM o WHERE NOT $4 OR o.decision_id IN (SELECT decision_id FROM top) GROUP BY 1
@@ -46,7 +46,7 @@ WITH o AS (
     AND (d.features->>'unique_buyers')::float >= $2),
 mid AS (SELECT point, min(ts) + (max(ts) - min(ts)) / 2 m FROM o GROUP BY 1)
 SELECT o.point, pol, count(*) n, avg(least(pnl, 20)) mean, stddev_samp(least(pnl, 20)) sd,
-       percentile_cont(0.5) WITHIN GROUP (ORDER BY pnl) med, avg((pnl > 0)::int) win,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY pnl) med, avg((pnl > 0)::int)::float8 win,
        avg(least(pnl, 20)) FILTER (WHERE o.ts < mid.m) h1, avg(least(pnl, 20)) FILTER (WHERE o.ts >= mid.m) h2
 FROM o JOIN mid USING (point) GROUP BY 1, 2
 """
@@ -106,7 +106,7 @@ async def build(db: Any, cfg: Any, hours: int = 48, evolved: dict | None = None)
 
 
 def fr(x: float) -> str:
-    return f"{x:+.1%}".replace(".", ",")
+    return f"{float(x):+.1%}".replace(".", ",")
 
 
 def render(board: dict, top: int = 8) -> str:
@@ -116,7 +116,7 @@ def render(board: dict, top: int = 8) -> str:
     def line(r: dict) -> str:
         return (f"{badges[r['verdict']]} {r['rang']}. {r.get('description', r['pol'])}\n"
                 f"     {fr(r['mean'])} par trade en moyenne (entre {fr(r['lo'])} et {fr(r['hi'])}), "
-                f"{r['win']:.0%} gagnants, {r['n']} cas")
+                f"{float(r['win']):.0%} gagnants, {r['n']} cas")
     sel = board.get("selection") or []
     allr = board.get("toutes") or []
     lines = [f"<b>Stratégies de sortie</b> — {len(allr)} testées sur {board.get('heures', 48)} h (simulation, frais compris)", ""]
