@@ -167,9 +167,9 @@ class TraderService:
                 try:
                     opened = [d for d, p in self.engine.positions.items() if p.status == "open"]
                     if opened:
-                        rows = await self.db.fetch("SELECT decision_id FROM paper_positions WHERE status='closed' "
-                                                   "AND decision_id = ANY($1)", opened)
-                        self.engine.orphans({r["decision_id"] for r in rows})
+                        rows = await self.db.fetch("SELECT decision_id, (state->>'last_price')::float8 p FROM paper_positions "
+                                                   "WHERE status='closed' AND decision_id = ANY($1)", opened)
+                        self.engine.orphans({r["decision_id"]: r["p"] or 0.0 for r in rows})
                 except Exception:  # noqa: BLE001
                     log.exception("synchronisation des positions")
             await asyncio.sleep(0.25)

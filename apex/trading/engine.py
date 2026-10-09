@@ -151,7 +151,7 @@ class TraderEngine:
             m = Market(ts=now, price=price, v_sol=(k * price) ** 0.5, v_tokens=(k / price) ** 0.5)
         self.on_market(mint, m)
 
-    def orphans(self, closed_paper: set[str]) -> list[Order]:
+    def orphans(self, closed_paper: dict[str, float] | set[str]) -> list[Order]:
         """Positions simulées dont le trade d'entraînement correspondant est clôturé (signal de vente passé
         pendant un redémarrage) : vendues au marché, sinon elles restent ouvertes indéfiniment."""
         out = []
@@ -159,8 +159,10 @@ class TraderEngine:
         for p in self.positions.values():
             if p.mode == SIM and p.status == "open" and p.tokens > 0 and p.decision_id in closed_paper \
                     and p.decision_id not in busy:
+                price = self.last_price(p.mint) or (closed_paper.get(p.decision_id, 0.0)
+                                                    if isinstance(closed_paper, dict) else 0.0)
                 out.append(self.on_signal({"decision_id": p.decision_id, "closed": True, "kind": "SYNCHRO",
-                                           "price": self.last_price(p.mint)}, time.time()))
+                                           "price": price}, time.time()))
         return [o for o in out if o is not None]
 
     # ---------------- exécution simulée ----------------

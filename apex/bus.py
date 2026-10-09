@@ -81,6 +81,10 @@ class Bus:
                     done.append(s)
                     continue
                 for msg_id, fields in entries:
+                    if not fields or b"d" not in fields:
+                        # message en attente déjà purgé de la file (longueur max atteinte) : on l'acquitte
+                        await self.r.xack(s, group, msg_id)
+                        continue
                     yield s, msg_id, loads(fields[b"d"])
                 pending[s] = entries[-1][0]
             for s in done:

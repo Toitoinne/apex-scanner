@@ -164,3 +164,16 @@ def test_orphan_positions_are_closed():
     assert eng.orphans(set()) == []
     orders = eng.orphans({"M:30"})                 # l'entraînement est clôturé : on vend
     assert len(orders) == 1 and orders[0].side == "sell"
+
+
+def test_orphan_without_market_data_uses_last_paper_price():
+    """Après un redémarrage, le simulateur peut n'avoir aucun prix pour une position : la vente utilise
+    alors le dernier prix connu du trade d'entraînement (sinon elle attendrait indéfiniment)."""
+    from apex.trading.engine import Position
+    eng = TraderEngine(limits=Limits(sol_per_trade=0.1), latency_s=2.0)
+    eng.positions["M:10"] = Position("M:10", "M", SIM, sol_in=0.1, tokens_initial=1e6, tokens=1e6, status="open")
+    eng._watch("M", None)
+    orders = eng.orphans({"M:10": VS / VT * 0.5})
+    assert len(orders) == 1
+    eng.step(1e10)
+    assert eng.positions["M:10"].status == "closed"
