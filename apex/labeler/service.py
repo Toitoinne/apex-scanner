@@ -122,7 +122,7 @@ class LabelerService:
         await self.db.execute(
             """UPDATE paper_positions SET state=$2, fills = fills || $3::jsonb, pnl=$4, pnl_sol=$4 * notional_sol,
                max_multiple=$5, status=$6, closed_at = CASE WHEN $6='closed' THEN now() ELSE closed_at END
-               WHERE decision_id=$1""",
+               WHERE decision_id=$1 AND status <> 'closed'""",
             s["decision_id"], st.to_dict() if st else {}, [fill], s["pnl_after"],
             (st.peak / st.entry) if st and st.entry else None, "closed" if s["closed"] else "open")
         reason = DANGER_LABELS.get(s.get("reason", ""), s.get("reason", ""))
@@ -216,9 +216,14 @@ class LabelerService:
             log.exception("reprise du suivi long (24 h) impossible — on continue sans")
             n_long = 0
         events, last_ts = await self.bus.history([B.RAW, B.DECISIONS, B.ALERTS], GROUP, window)
+        # trades d'entraînement DÉJÀ TERMINÉS : jamais rouverts par le rejeu (sinon, faute de prix, ils étaient
+        # refermés au prix d'achat et leur vrai résultat — ex. −50 % — était écrasé par −2,5 %)
+        done = {r["decision_id"] for r in await self.db.fetch(
+            "SELECT decision_id FROM paper_positions WHERE status='closed' AND opened_at > now() - interval '6 hours'")}
         for ev in events:
             if isinstance(ev, dict) and "decision_id" in ev and "policy" in ev:
-                self.engine.open_position(ev)
+                if ev["decision_id"] not in done:
+                    self.engine.open_position(ev)
             else:
                 self.engine.on_event(ev)
         kept = [h for h in self.engine.heap if h[0] > last_ts or h[2] == OUT]

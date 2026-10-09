@@ -66,3 +66,17 @@ def test_learner_forgets_decisions():
                               "eligible": True, "preds": {}, "champions": {}}
     assert lr.apply_command({"op": "forget_decisions", "ids": ["M:600", "inconnu"]})["forgotten"] == 1
     assert "M:600" not in lr.long_store
+
+
+def test_dexscreener_ignored_when_real_pool_price_is_known():
+    """DexScreener peut s'écarter de 20 % du prix réel du pool : quand les trades PumpSwap décodés sont
+    reçus, ils font foi (sinon des prises de bénéfices se déclenchent sur un prix qui n'existe pas)."""
+    from apex.labeler.engine import LabelerEngine
+    lab = LabelerEngine(Config.load().data)
+    lab.on_event(TokenCreated(mint="M", name="m", symbol="M", uri="", creator="dev", bonding_curve="", slot=0,
+                              ts=0.0, signature="c"))
+    lab.on_event(PriceTick(mint="M", ts=100.0, price=2.5e-6, source="pumpswap", trader="a", is_buy=True, sol=1, tokens=1e5))
+    lab.on_event(PriceTick(mint="M", ts=110.0, price=3.1e-6, source="dexscreener"))
+    assert lab.tracks["M"].prices[-1] == 2.5e-6
+    lab.on_event(PriceTick(mint="M", ts=500.0, price=3.0e-6, source="dexscreener"))   # plus de trade PumpSwap : utilisé
+    assert lab.tracks["M"].prices[-1] == 3.0e-6

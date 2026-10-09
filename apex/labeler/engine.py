@@ -98,6 +98,7 @@ class LabelerEngine:
         self._last_closure = 0.0
         self.guard = PriceGuard(cfg.get("pricefeed", {}).get("max_jump", 5.0))
         self.exit_ml = ExitLearner(ex.get("learned", {}))
+        self._amm_seen: dict[str, float] = {}       # dernier trade PumpSwap décodé par token
 
     # ------------------------------------------------------------------
     def on_event(self, ev: Any) -> None:
@@ -131,6 +132,10 @@ class LabelerEngine:
                 hold_p = None
             self._update_positions(ev.mint, ev.ts, ev.price, danger, hold_p)
         elif isinstance(ev, PriceTick):
+            if ev.source == "pumpswap":
+                self._amm_seen[ev.mint] = ev.ts
+            elif ev.source == "dexscreener" and ev.ts - self._amm_seen.get(ev.mint, -1e18) < 60:
+                return     # le prix réel du pool (trades PumpSwap décodés) fait foi : DexScreener peut s'en écarter
             tr = self.tracks.get(ev.mint)
             if tr is not None and tr.prices:
                 self.guard.seed(ev.mint, tr.prices[-1])
