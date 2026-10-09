@@ -38,11 +38,11 @@ def verdict(r: dict) -> str:
     if "retard_median_s" in r:
         parts.append(f"trades reçus {r['retard_median_s']} s après la blockchain en général (95 % en moins de {r['retard_p95_s']} s)")
     if "prix_ecart_median_pct" in r:
-        parts.append(f"prix identiques à la blockchain à {r['prix_ecart_median_pct']:.1f} % près ({r['prix_n']} tokens)")
+        parts.append(f"prix identiques à la blockchain à {r['prix_ecart_median_pct']:.1f} % près ({r.get('prix_n', '?')} tokens)")
     if "completude_pct" in r:
         parts.append(f"{r['completude_pct']:.0f} % des achats/ventes vus ({r['completude_vues']}/{r['completude_total']})")
     if "pumpswap_ecart_median_pct" in r:
-        parts.append(f"prix après migration à {r['pumpswap_ecart_median_pct']:.1f} % de la blockchain ({r['pumpswap_n']} tokens)")
+        parts.append(f"prix après migration à {r['pumpswap_ecart_median_pct']:.1f} % de la blockchain ({r.get('pumpswap_n', '?')} tokens)")
     return f"{head} : " + " ; ".join(parts)
 
 
