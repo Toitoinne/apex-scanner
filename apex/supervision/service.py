@@ -45,7 +45,6 @@ class Supervisor:
         self.meta = EfficacyTable(explore=self.s["meta_explore"])
         self.improver = improver
         self.reporter = Reporter(db, bus, cfg, self.meta)
-        self._last_strong_alert = 0.0
         self._last_outage: dict[str, float] = {}
         self._down: set[str] = set()
 
@@ -142,11 +141,16 @@ class Supervisor:
                    f"alertes rendues plus sélectives (seuil minimum {new_lo:.0%}). Les modèles ne sont pas touchés.")
             events.append(msg + f" ({'ok' if res.get('ok') else 'échec'})")
             await self.notify_now(msg)
-        ref = await self.db.fetchval("SELECT value FROM reference_curves WHERE curve='error_rate'")
+        # référence = moyenne des dernières 24 h (une référence figée au premier jour devient fausse quand
+        # le marché change) ; anti-répétition stockée dans Redis pour survivre aux redémarrages
+        ref = await self.db.fetchval(
+            """SELECT avg(value) FROM curve_points WHERE curve='error_rate' AND win='1h'
+               AND ts BETWEEN now() - interval '25 hours' AND now() - interval '1 hour'""")
         cur = await self.db.fetchval(
             "SELECT value FROM curve_points WHERE curve='error_rate' AND win='1h' ORDER BY ts DESC LIMIT 1")
-        if ref and cur and cur > ref * self.s["strong_regression_ratio"] and time.time() - self._last_strong_alert > 6 * 3600:
-            self._last_strong_alert = time.time()
+        last = float(await self.bus.r.get("apex:last_strong_regression_alert") or 0)
+        if ref and cur and cur > ref * self.s["strong_regression_ratio"] and time.time() - last > 6 * 3600:
+            await self.bus.r.set("apex:last_strong_regression_alert", str(time.time()))
             await self.notify_now(
                 f"📉 Le bot se trompe plus que d'habitude depuis 1 h ({cur:.1%} d'erreurs contre {ref:.1%} en temps normal). "
                 "C'est souvent lié au marché (activité inhabituelle). Il s'ajuste tout seul : rien à faire de ton côté.")
