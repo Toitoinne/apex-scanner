@@ -52,6 +52,12 @@ async def main():
         out[k.split(":", 1)[1]] = await bus.get_json(k, {})
     ing = out.get("ingestor:stats") or {}
     ing.pop("bytes", None)
+    board = await bus.get_json("apex:exits:board", {}) or {}
+    keep = ("pol", "description", "rang", "n", "mean", "lo", "hi", "win", "h1", "h2", "verdict")
+    out["sorties"] = {"nb_testees": len(board.get("toutes") or []),
+                      "meilleures_selection": [{k: r.get(k) for k in keep} for r in (board.get("selection") or [])[:8]],
+                      "pires_selection": [r.get("pol") for r in (board.get("selection") or [])[-3:]],
+                      "variantes_evoluees": list((await bus.get_json("apex:exits:evolved", {}) or {}).keys())}
     hb = await bus.heartbeats()
     out["heartbeat_age_s"] = {s: round(time.time() - t) for s, t in hb.items()}
     sup = await bus.get_json("apex:supervisor:last_cycle", {}) or {}
