@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import random
 import time
 import uuid
 from typing import Any
@@ -23,6 +24,8 @@ from ..config import Config, secrets
 from ..db import DB
 from ..reporting import bulletin as BU
 from ..reporting import exit_board as EB
+from ..trading import evolve as EV
+from ..trading.exits import build_panel
 from ..reporting.reports import Reporter
 from .corrections import Plan, build_plan, candidates_for
 from .detector import ABNORMAL, Detected, Detector
@@ -279,6 +282,37 @@ class Supervisor:
         if since_v is not None and new != R.SUSPENDED:
             extra = "\n(reprise prouvée sur les positions postérieures à la suspension)"
         return f"{head}\n\n<b>Critères</b> ({s.n} positions, {s.days:.1f} j)\n{crit}{extra}"
+
+    async def evolved(self) -> dict:
+        ev = await self.bus.get_json("apex:exits:evolved", None)
+        if ev is None:      # Redis vidé : on reprend la dernière population enregistrée en base
+            row = await self.db.fetchrow("SELECT data FROM system_events WHERE kind='evolution' ORDER BY ts DESC LIMIT 1")
+            ev = ((row["data"] if row else None) or {}).get("evolved", {})
+            if isinstance(ev, str):
+                import json
+                ev = json.loads(ev)
+            await self.bus.set_json("apex:exits:evolved", ev)
+        return ev or {}
+
+    async def evolve_exits(self, board: dict) -> None:
+        """Les réglages des stratégies de sortie apprennent : toutes les 12 h, variantes des meilleures,
+        retrait des variantes qui échouent (les stratégies de base restent)."""
+        every = self.cfg.get("exits.evolution.every_s", 43200)
+        last = float(await self.bus.r.get("apex:exits:last_evolution") or 0)
+        if not self.cfg.get("exits.evolution.enabled", True) or time.time() - last < every:
+            return
+        rows = board.get("selection") or []
+        if sum(1 for r in rows if r.get("n", 0) >= 300) < 5:
+            rows = board.get("toutes") or []        # pas assez de recul sur la sélection : toutes les décisions
+        gen = int(await self.bus.r.incr("apex:exits:gen"))
+        evolved = await self.evolved()
+        new, added, removed = EV.evolve(rows, build_panel(self.cfg.data.get("exits", {})), evolved, gen,
+                                        random.Random(gen), cap=self.cfg.get("exits.evolution.cap", 12))
+        await self.bus.set_json("apex:exits:evolved", new)
+        await self.bus.r.set("apex:exits:last_evolution", str(time.time()))
+        msg = EV.describe(added, removed, new)
+        await self.db.log_event("info", "evolution", f"évolution des stratégies de sortie : {msg}",
+                                {"evolved": new, "added": added, "removed": removed, "gen": gen})
 
     async def bulletin_if_due(self) -> None:
         """Bulletin en langage simple à heures fixes (heure de Paris) ; un seul par créneau, même après redémarrage."""
@@ -577,9 +611,11 @@ class Supervisor:
             if now - last_board >= 3600:
                 last_board = now
                 try:
-                    await self.bus.set_json("apex:exits:board", await EB.build(self.db, self.cfg, 48))
+                    board = await EB.build(self.db, self.cfg, 48, await self.evolved())
+                    await self.bus.set_json("apex:exits:board", board)
+                    await self.evolve_exits(board)
                 except Exception:  # noqa: BLE001
-                    log.exception("classement des stratégies de sortie")
+                    log.exception("classement / évolution des stratégies de sortie")
             await asyncio.sleep(self.s["cycle_s"])
 
 

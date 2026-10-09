@@ -63,8 +63,8 @@ def rank(rows: list[dict], reference: str = "TP2_SL50", top_k: int = 5) -> list[
     return out
 
 
-async def build(db: Any, cfg: Any, hours: int = 48) -> dict:
-    desc = {k: v.get("description", k) for k, v in build_panel(cfg.data.get("exits", {})).items()}
+async def build(db: Any, cfg: Any, hours: int = 48, evolved: dict | None = None) -> dict:
+    desc = {k: v.get("description", k) for k, v in build_panel(cfg.data.get("exits", {}), evolved).items()}
     res: dict = {"heures": hours}
     for key, only_top in (("toutes", False), ("selection", True)):
         rows = [dict(r) for r in await db.fetch(SQL, hours, cfg.get("bandit.min_buyers_to_alert", 10),

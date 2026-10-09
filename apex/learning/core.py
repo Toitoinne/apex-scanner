@@ -51,6 +51,7 @@ class Learner:
         self.primary = c["labels"]["primary"]
         self.horizons = c["models"]["horizons"]
         self.ensembles = {h: HorizonEnsemble(h, c["models"], c["calibration"]["method"]) for h in self.horizons}
+        self.evolved: dict[str, dict] = {}
         self.bandit = self._new_bandit()
         self.short = [h for h in self.horizons if c["labels"][h]["horizon_s"] <= 3600]
         self.long = [h for h in self.horizons if h not in self.short]
@@ -76,7 +77,7 @@ class Learner:
     def _new_bandit(self) -> AlertBandit:
         b = self.cfg.data["bandit"]
         scores = {k: v["thresholds"] for k, v in b.get("scores", {"x2": {"thresholds": b["thresholds"]}}).items()}
-        allp = build_panel(self.cfg.data.get("exits", {}))
+        allp = build_panel(self.cfg.data.get("exits", {}), getattr(self, "evolved", {}))
         policies = b.get("policies") or ["TP2_SL50"]
         if policies == "all":
             policies = list(allp)
@@ -151,7 +152,7 @@ class Learner:
         d = dc.d
         fee = self.cfg.get("fees.pumpswap_fee_bps") if d.meta.get("migrated") else self.cfg.get("fees.pump_fee_bps")
         arm = self.bandit.active_arm()
-        pol_cfg = build_panel(self.cfg.data.get("exits", {})).get(arm.policy) or {}
+        pol_cfg = build_panel(self.cfg.data.get("exits", {}), self.evolved).get(arm.policy) or {}
         return {
             "decision_id": d.decision_id, "mint": d.mint, "point": d.point, "ts": d.ts,
             "entry_price": d.entry_price, "v_sol": d.v_sol, "v_tokens": d.v_tokens,
@@ -305,6 +306,14 @@ class Learner:
         if len(self.mint_preds) > 100_000:
             for m in list(self.mint_preds)[:50_000]:
                 self.mint_preds.pop(m, None)
+
+    def set_evolved(self, evolved: dict[str, dict]) -> None:
+        """Nouvelles variantes de stratégies de sortie : bras du bandit ajoutés / retirés."""
+        if evolved == self.evolved:
+            return
+        self.evolved = dict(evolved)
+        fresh = self._new_bandit()
+        self.bandit.sync_arms(fresh.scores_cfg, fresh.points, fresh.policies)
 
     def periodic(self, now: float) -> list[str]:
         """Sélection des champions + rééchantillonnage du bandit."""
@@ -478,6 +487,7 @@ class Learner:
             st = pickle.load(f)  # noqa: S301 — fichiers produits par ce système uniquement
         self.ensembles = st["ensembles"]
         self.bandit = st["bandit"]
+        self.evolved = getattr(self, "evolved", {}) or {}
         if not hasattr(self.bandit, "scores_cfg"):
             self.bandit = self._new_bandit()      # ancien format (seuil seul) : nouveau bandit
         else:

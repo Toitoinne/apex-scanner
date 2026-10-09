@@ -201,6 +201,7 @@ class LabelerService:
                 "sortie_apprise": self.engine.exit_ml.summary()})
             if time.time() - self._exit_saved > 600:
                 self.save_exit_model()
+                self.engine.set_evolved(await self.bus.get_json("apex:exits:evolved", {}) or {})
 
     # ------------------------------------------------------------------
     async def rebuild(self) -> None:
@@ -325,6 +326,7 @@ class LabelerService:
 
     async def run(self) -> None:
         self.load_exit_model()
+        self.engine.set_evolved(await self.bus.get_json("apex:exits:evolved", {}) or {})
         # signal de vie pendant la reprise (sinon le contrôle de santé croit le labeler en panne)
         hb = asyncio.create_task(B.heartbeat_loop(self.bus, "labeler"))
         self.engine.exit_ml.learn = False      # la reprise rejoue le passé : déjà appris avant l'arrêt

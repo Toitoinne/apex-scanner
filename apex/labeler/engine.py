@@ -83,6 +83,7 @@ class LabelerEngine:
         ex = cfg.get("exits", {})
         self.exit_fee = ex.get("fee", 0.02)
         self.policies = {n: Policy.from_cfg(n, c) for n, c in build_panel(ex).items()}
+        self.active_policies = set(self.policies)       # stratégies simulées sur les nouvelles décisions
         self.sale_cost = ex.get("sale_cost", 0.0)
         self.min_buyers = cfg.get("bandit", {}).get("min_buyers_to_alert", 0)
         self.idle_finalize_s = ex.get("idle_finalize_s", 1800)
@@ -161,6 +162,15 @@ class LabelerEngine:
         tr.peak_price = max(tr.peak_price, price)
         return t
 
+    def set_evolved(self, evolved: dict[str, dict]) -> None:
+        """Variantes de l'évolution : ajoutées pour les décisions à venir ; une variante retirée n'est plus
+        simulée sur les nouvelles décisions, mais ses simulations en cours vont jusqu'au bout."""
+        allp = build_panel(self.cfg.get("exits", {}), evolved)
+        for n, c in allp.items():
+            if n not in self.policies:
+                self.policies[n] = Policy.from_cfg(n, c)
+        self.active_policies = set(allp)
+
     def _exit_signal(self, tr: Track, t: float, price: float) -> float | None:
         """Sortie apprise : seulement pour les tokens où une position (simulée ou réelle) est ouverte."""
         if not tr.sims and not any(p.mint == tr.created.mint and not p.state.closed for p in self.positions.values()):
@@ -201,7 +211,7 @@ class LabelerEngine:
         alertable = not d.features or (not d.blocked and d.features.get("unique_buyers", 0) >= self.min_buyers)
         if self.policies and alertable:
             tr.sims[d.decision_id] = {n: PolicyState(n, d.entry_price, d.ts, self.exit_fee, sale_cost=self.sale_cost)
-                                      for n in self.policies}
+                                      for n in self.active_policies}
             heapq.heappush(self.heap, (d.ts + self.outcome_horizon, d.decision_id, OUT))
             tr.pending += 1
 

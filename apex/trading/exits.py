@@ -163,14 +163,14 @@ def simulate(p: Policy, path: list[tuple[float, float]], entry: float, t0: float
     return st
 
 
-def build_panel(ex: dict) -> dict[str, dict]:
+def build_panel(ex: dict, evolved: dict[str, dict] | None = None) -> dict[str, dict]:
     """Toutes les stratégies de sortie testées : celles écrites dans la config + un PANEL généré
     (exits.panel) qui couvre les grandes familles. Chacune est simulée sur chaque décision alertable ;
     le bandit garde celles qui rapportent vraiment."""
     pols = dict(ex.get("policies", {}))
     pan = ex.get("panel") or {}
     if not pan.get("enabled"):
-        return pols
+        return {**pols, **(evolved or {})}
 
     def add(name: str, c: dict) -> None:
         pols.setdefault(name, c)
@@ -214,6 +214,8 @@ def build_panel(ex: dict) -> dict[str, dict]:
             {"stop_loss": 0.5, "take_profits": [], "trail": 0.5, "trail_activate": 3.0, "time_limit_s": 86400,
              "learned_exit": True, "hold_threshold": thr, "min_hold_s": 30,
              "description": f"tout garder, tout vendre quand ses chances de hausse passent sous {thr:.0%}"})
+    for name, c in (evolved or {}).items():                                 # 7. variantes créées par l'évolution
+        add(name, c)
     return pols
 
 

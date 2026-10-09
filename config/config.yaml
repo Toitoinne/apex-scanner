@@ -81,6 +81,9 @@ exits:
   # PANEL de stratégies générées (≈ 35 de plus) : objectif fixe, sortie au temps, stop suiveur, sécurisation
   # de la mise, paliers, sortie apprise plus ou moins prudente. Toutes simulées sur chaque décision alertable.
   panel: {enabled: true}
+  # ÉVOLUTION : toutes les 12 h, variantes des meilleures stratégies (réglages modifiés), retrait des
+  # variantes qui échouent ; jusqu'à 12 variantes en test en plus des stratégies de base (jamais retirées)
+  evolution: {enabled: true, every_s: 43200, cap: 12}
   sale_cost: 0.005              # frais de réseau par vente (0,0005 SOL) rapportés à une mise de 0,1 SOL
   idle_finalize_s: 1800         # token sans échange depuis 30 min : simulations soldées au dernier prix
   # modèle de sortie : « le prix touchera-t-il +30 % avant −20 % dans les 10 min ? », appris en continu

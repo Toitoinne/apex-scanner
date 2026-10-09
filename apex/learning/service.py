@@ -202,6 +202,7 @@ class LearnerService:
                 for msg in self.learner.periodic(now):
                     await self.db.log_event("info", "champion", msg)
             if now - last_bandit >= c.get("bandit.resample_every_s"):
+                self.learner.set_evolved(await self.bus.get_json("apex:exits:evolved", {}) or {})
                 arm = self.learner.bandit.resample()
                 await self.db.log_event("info", "bandit", f"bras actif {arm.key}", {"mean": arm.mean(), "rate": self.learner.bandit.apd(arm)})
         if now - last_lgbm >= c.get("models.lgbm_every_s"):
