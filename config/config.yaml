@@ -253,7 +253,7 @@ supervision:
   strong_regression_ratio: 1.5   # alerte immédiate si erreur > 1,5 × référence
   meta_explore: 0.15
   snapshot_every_s: 900
-  snapshot_keep: 40
+  snapshot_keep: 12              # ~420 Mo chacune : 12 suffisent pour revenir en arrière (disque)
   self_reference_after_h: 24     # sans backfill : courbes de référence = 12–24 h de live
 
 claude:
