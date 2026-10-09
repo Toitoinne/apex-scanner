@@ -81,7 +81,13 @@ def calibration(p: np.ndarray, y: np.ndarray, bins: int = 10) -> tuple[list[dict
 
 async def run(db: Any, cfg: Any, hours: int = 48) -> dict:
     primary = cfg["labels"]["primary"]
-    rows = await db.fetch(SQL, hours, cfg.get("bandit.min_buyers_to_alert", 10), primary)
+    rows = [dict(r) for r in await db.fetch(SQL, hours, cfg.get("bandit.min_buyers_to_alert", 10), primary)]
+    # calcul lourd (dizaines de milliers de décisions) hors de la boucle principale : sinon le service
+    # se fige plusieurs minutes (plus de signal de vie)
+    return await asyncio.to_thread(analyze, rows, hours)
+
+
+def analyze(rows: list[dict], hours: int) -> dict:
     if len(rows) < 500:
         return {"n": len(rows), "resume": "pas encore assez de décisions avec résultat connu"}
     y = np.array([r["y"] for r in rows], dtype=float)
