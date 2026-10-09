@@ -103,3 +103,16 @@ def test_price_guard_rejects_isolated_spikes_but_accepts_confirmed_moves():
     assert g.accept("M", 3.2)                 # retour à la normale
     assert not g.accept("M", 40.0)            # saut x12 ...
     assert g.accept("M", 42.0)                # ... confirmé par le relevé suivant : accepté
+
+
+def test_danger_window_sums_slide():
+    from apex.trading.exits import DangerDetector
+    d = DangerDetector("dev")
+    for i in range(10):                       # gros achats anciens : ils doivent sortir de la fenêtre de 30 s
+        d.on_trade(float(i), f"a{i}", True, 10.0, 1e6, 1.0)
+    assert d._buys == 100.0
+    sig = None
+    for i in range(6):                        # 40 s plus tard : ventes en panique, prix −30 %
+        sig = d.on_trade(50.0 + i, f"s{i}", False, 2.0, 1e5, 1.0 - 0.06 * (i + 1)) or sig
+    assert d._buys == 0.0 and abs(d._sells - 12.0) < 1e-9
+    assert sig == "PANIQUE"

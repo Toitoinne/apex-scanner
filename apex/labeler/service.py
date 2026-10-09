@@ -265,12 +265,12 @@ class LabelerService:
                 for dt_, price in ((5, r["low"]), (30, r["high"]), (55, r["close"])):
                     if price:
                         events[r["mint"]].append((b + dt_, 1, PriceTick(mint=r["mint"], ts=b + dt_, price=price, source="candle")))
-            # prix après migration regroupés par tranches de 10 s (bas → haut → dernier, ordre prudent) :
-            # des millions de relevés PumpSwap à la seconde rendaient la reprise trop lente (> 4 min)
-            for r in await self.db.fetch(
-                    """SELECT time_bucket('10 seconds', ts) b, mint, min(price) low, max(price) high, last(price, ts) close
-                       FROM price_ticks WHERE mint = ANY($1)
-                       AND ts > now() - interval '25 hours' AND ts < to_timestamp($2) GROUP BY 1, 2""", chunk, cutoff):
+        # prix après migration, regroupés par tranches de 10 s (bas → haut → dernier, ordre prudent), lus en UNE
+        # requête puis filtrés ici : « mint = ANY(...) » par paquets prenait ~3 min sur des millions de relevés
+        for r in await self.db.fetch(
+                """SELECT time_bucket('10 seconds', ts) b, mint, min(price) low, max(price) high, last(price, ts) close
+                   FROM price_ticks WHERE ts > now() - interval '25 hours' AND ts < to_timestamp($1) GROUP BY 1, 2""", cutoff):
+            if r["mint"] in events:
                 b = r["b"].timestamp()
                 for dt_, price in ((2, r["low"]), (5, r["high"]), (8, r["close"])):
                     events[r["mint"]].append((b + dt_, 1, PriceTick(mint=r["mint"], ts=b + dt_, price=price, source="replay")))

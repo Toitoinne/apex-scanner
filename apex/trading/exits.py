@@ -153,6 +153,8 @@ class DangerDetector:
         self.supply = supply
         self.dev_balance = 0.0
         self.window: deque[tuple[float, bool, float, float]] = deque()   # (t, is_buy, sol, price)
+        self._buys = 0.0      # sommes glissantes sur la fenêtre (mises à jour à l'entrée et à la sortie)
+        self._sells = 0.0
 
     def on_trade(self, t: float, trader: str, is_buy: bool, sol: float, tokens: float, price: float) -> str | None:
         signal = None
@@ -166,11 +168,18 @@ class DangerDetector:
         if signal is None and not is_buy and tokens >= 0.03 * self.supply:
             signal = "GROS_DUMP"
         self.window.append((t, is_buy, sol, price))
+        if is_buy:
+            self._buys += sol
+        else:
+            self._sells += sol
         while self.window and self.window[0][0] < t - 30:
-            self.window.popleft()
+            _, b0, s0, _ = self.window.popleft()
+            if b0:
+                self._buys -= s0
+            else:
+                self._sells -= s0
         if signal is None and len(self.window) >= 5:
-            buys = sum(s for _, b, s, _ in self.window if b)
-            sells = sum(s for _, b, s, _ in self.window if not b)
+            buys, sells = max(self._buys, 0.0), max(self._sells, 0.0)
             p0 = self.window[0][3]
             if sells >= 3 * max(buys, 0.01) and p0 > 0 and price <= 0.75 * p0:
                 signal = "PANIQUE"
