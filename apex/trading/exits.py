@@ -11,6 +11,7 @@ danger (dev qui vend, gros porteur qui vide, panique vendeuse) et une limite de 
 """
 from __future__ import annotations
 
+import math
 from collections import deque
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -229,16 +230,23 @@ class DangerDetector:
         self.creator = creator
         self.supply = supply
         self.dev_balance = 0.0
+        self.dev_bought = 0.0
+        self.dev_sold = 0.0
         self.window: deque[tuple[float, bool, float, float]] = deque()   # (t, is_buy, sol, price)
         self._buys = 0.0      # sommes glissantes sur la fenêtre (mises à jour à l'entrée et à la sortie)
         self._sells = 0.0
+        # détail des ventes récentes (30 s) et volume sur 2 min : signaux qui précèdent un effondrement
+        self.sells30: deque[tuple[float, float, str, float]] = deque()  # (t, tokens, vendeur, sol)
+        self.vol120: deque[tuple[float, float]] = deque()               # (t, sol)
 
     def on_trade(self, t: float, trader: str, is_buy: bool, sol: float, tokens: float, price: float) -> str | None:
         signal = None
         if trader == self.creator:
             if is_buy:
                 self.dev_balance += tokens
+                self.dev_bought += tokens
             else:
+                self.dev_sold += tokens
                 if self.dev_balance > 0 and tokens >= 0.5 * self.dev_balance:
                     signal = "DEV_VEND"
                 self.dev_balance = max(0.0, self.dev_balance - tokens)
@@ -249,6 +257,12 @@ class DangerDetector:
             self._buys += sol
         else:
             self._sells += sol
+            self.sells30.append((t, tokens, trader, sol))
+        self.vol120.append((t, sol))
+        while self.sells30 and self.sells30[0][0] < t - 30:
+            self.sells30.popleft()
+        while self.vol120 and self.vol120[0][0] < t - 120:
+            self.vol120.popleft()
         while self.window and self.window[0][0] < t - 30:
             _, b0, s0, _ = self.window.popleft()
             if b0:
@@ -261,6 +275,23 @@ class DangerDetector:
             if sells >= 3 * max(buys, 0.01) and p0 > 0 and price <= 0.75 * p0:
                 signal = "PANIQUE"
         return signal
+
+
+def flow_features(d: "DangerDetector | None", t: float) -> dict[str, float]:
+    """Pression vendeuse et essoufflement du volume (pour le modèle de sortie apprise)."""
+    if d is None:
+        return {}
+    sells10 = sum(s for ts, _, _, s in d.sells30 if ts >= t - 10)
+    vol10 = sum(s for ts, s in d.vol120 if ts >= t - 10)
+    vol30 = sum(s for ts, s in d.vol120 if ts >= t - 30)
+    vol_before = sum(s for ts, s in d.vol120 if ts < t - 30)            # 30 → 120 s avant
+    return {
+        "sell_share10": sells10 / vol10 if vol10 > 0 else 0.5,
+        "big_sell30": max((tk for _, tk, _, _ in d.sells30), default=0.0) / d.supply,
+        "sellers30": math.log1p(len({w for _, _, w, _ in d.sells30})),
+        "dev_sold_frac": d.dev_sold / d.dev_bought if d.dev_bought > 0 else 0.0,
+        "vol_accel": math.log((vol30 + 0.01) / (vol_before / 3 + 0.01)),   # > 0 : le volume accélère
+    }
 
 
 DANGER_LABELS = {"DEV_VEND": "le dev vend", "GROS_DUMP": "un gros porteur vide sa position",

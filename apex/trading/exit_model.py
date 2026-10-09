@@ -19,6 +19,8 @@ from typing import Any
 
 from river import compose, linear_model, optim, preprocessing
 
+from .exits import flow_features
+
 
 @dataclass
 class ExitTrackState:
@@ -72,6 +74,14 @@ class ExitLearner:
             x["buy_ratio30"] = buys / (buys + sells) if buys + sells > 0 else 0.5
             x["flow30"] = math.log1p(buys + sells)
             x["n30"] = float(len(getattr(danger, "window", ())))
+            if hasattr(danger, "sells30"):
+                x.update(flow_features(danger, t))
+        # sommet récent : depuis quand, et à quelle distance (un repli après un pic annonce souvent la fin)
+        i = bisect.bisect_left(times, t - 300)
+        if i < len(prices):
+            j = max(range(i, len(prices)), key=prices.__getitem__)
+            x["since_peak300"] = math.log1p(max(0.0, t - times[j]))
+            x["from_peak300"] = price / prices[j] - 1 if prices[j] > 0 else 0.0
         return x
 
     @property

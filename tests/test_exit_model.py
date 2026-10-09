@@ -71,3 +71,22 @@ def test_labeler_runs_learned_exits_end_to_end():
                                sol=0.3, tokens=1e6, v_sol=price * 3e8, v_tokens=3e8))
     s = eng.exit_ml.summary()
     assert s["situations_apprises"] > 100 and s["pret"]
+
+
+def test_crash_precursors_are_visible_to_the_exit_model():
+    from apex.trading.exits import DangerDetector, flow_features
+    d = DangerDetector("dev")
+    for i in range(60):                                   # phase d'achat, volume soutenu
+        d.on_trade(float(i), f"a{i}", True, 1.0, 1e6, 1.0 + i / 100)
+    d.on_trade(60.0, "dev", True, 1.0, 2e7, 1.6)
+    calm = flow_features(d, 60.0)
+    for i in range(8):                                    # 8 vendeurs dont le dev et un gros porteur
+        d.on_trade(61.0 + i, "dev" if i == 0 else f"s{i}", False, 2.0, 5e7 if i == 3 else 1e6, 1.6 - i / 20)
+    rush = flow_features(d, 69.0)
+    assert rush["sell_share10"] > 0.8 > calm["sell_share10"]
+    assert rush["big_sell30"] >= 0.05 and rush["sellers30"] > calm["sellers30"]
+    assert rush["dev_sold_frac"] > 0
+    times = [float(i) for i in range(70)]
+    prices = [1.0 + i / 100 for i in range(61)] + [1.6 - i / 20 for i in range(9)]
+    x = ExitLearner.features(0.0, times, prices, max(prices), 69.0, prices[-1], False, d)
+    assert x["from_peak300"] < -0.2 and "sell_share10" in x
