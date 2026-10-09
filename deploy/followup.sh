@@ -58,6 +58,12 @@ async def main():
                       "meilleures_selection": [{k: r.get(k) for k in keep} for r in (board.get("selection") or [])[:8]],
                       "pires_selection": [r.get("pol") for r in (board.get("selection") or [])[-3:]],
                       "variantes_evoluees": list((await bus.get_json("apex:exits:evolved", {}) or {}).keys())}
+    ea = await bus.get_json("apex:entry:audit", {}) or {}
+    out["entree"] = {"resume": ea.get("resume"), "modele_auc": ea.get("modele_auc"),
+                     "ecart_calibration": ea.get("ecart_calibration"), "calibration_top_bas": (ea.get("calibration") or [None])[::9],
+                     "par_point": ea.get("par_point"), "meilleurs_indices": [
+                         {k: r.get(k) for k in ("feature", "auc", "stable", "lift_top10")} for r in (ea.get("features") or [])[:10]],
+                     "inutiles": ea.get("inutiles"), "instables": ea.get("instables")}
     hb = await bus.heartbeats()
     out["heartbeat_age_s"] = {s: round(time.time() - t) for s, t in hb.items()}
     sup = await bus.get_json("apex:supervisor:last_cycle", {}) or {}
