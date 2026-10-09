@@ -167,6 +167,31 @@ class LabelerEngine:
         tr.peak_price = max(tr.peak_price, price)
         return t
 
+    def restore(self, events: list, last_ts: float, done: set[str]) -> tuple[int, int]:
+        """Reprise après redémarrage (cœur pur, testé) : rejoue l'historique déjà traité pour retrouver
+        chemins de prix, simulations et positions. Les trades d'entraînement déjà TERMINÉS (`done`) ne sont
+        pas rouverts ; les labels déjà échus ne sont pas réémis ; les signaux du rejeu (déjà envoyés avant
+        l'arrêt) sont jetés. Retourne (échéances gardées, échéances abandonnées)."""
+        for ev in events:
+            if isinstance(ev, dict) and "decision_id" in ev and "policy" in ev:
+                if ev["decision_id"] not in done:
+                    self.open_position(ev)
+            else:
+                self.on_event(ev)
+        kept = [h for h in self.heap if h[0] > last_ts or h[2] == OUT]
+        dropped = len(self.heap) - len(kept)
+        heapq.heapify(kept)
+        self.heap = kept
+        for tr in self.tracks.values():
+            tr.pending = 0
+        for _, did, _ in kept:
+            d = self.decisions.get(did)
+            if d and d.mint in self.tracks:
+                self.tracks[d.mint].pending += 1
+        outcomes, _signals = self.drain()          # signaux déjà envoyés avant l'arrêt
+        self.outcomes = outcomes                    # outcomes republiés (dédupliqués en aval)
+        return len(kept), dropped
+
     def set_evolved(self, evolved: dict[str, dict]) -> None:
         """Variantes de l'évolution : ajoutées pour les décisions à venir ; une variante retirée n'est plus
         simulée sur les nouvelles décisions, mais ses simulations en cours vont jusqu'au bout."""

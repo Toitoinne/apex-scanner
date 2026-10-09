@@ -58,6 +58,9 @@ async def main():
                       "meilleures_selection": [{k: r.get(k) for k in keep} for r in (board.get("selection") or [])[:8]],
                       "pires_selection": [r.get("pol") for r in (board.get("selection") or [])[-3:]],
                       "variantes_evoluees": list((await bus.get_json("apex:exits:evolved", {}) or {}).keys())}
+    co = await bus.get_json("apex:consistency", {}) or {}
+    out["coherence"] = {"resume": co.get("resume"), "ok": co.get("ok"), "controles": co.get("controles"),
+                        "age_min": round((time.time() - co.get("ts", 0)) / 60) if co else None}
     ea = await bus.get_json("apex:entry:audit", {}) or {}
     out["entree"] = {"resume": ea.get("resume"), "modele_auc": ea.get("modele_auc"),
                      "ecart_calibration": ea.get("ecart_calibration"), "calibration_top_bas": (ea.get("calibration") or [None])[::9],

@@ -292,15 +292,7 @@ class FeatureService:
         events, last_ts = await self.bus.history([B.RAW], GROUP, 7200)
         for ev in events:
             self.engine.on_event(ev)
-        for st in self.engine.states.values():
-            for s in self.engine.points:
-                if st.t0 + s <= last_ts:
-                    st.emitted_points.add(str(s))
-            if st.migrated_ts:
-                st.emitted_points.add("migration")
-            for pt, due in st.due.items():          # points d'étude (après migration, 2e vague) déjà échus
-                if due <= last_ts:
-                    st.emitted_points.add(pt)
+        self.engine.mark_elapsed(last_ts)
         log.info("état reconstruit : %d événements, %d tokens actifs", len(events), len(self.engine.states))
 
     async def run(self) -> None:

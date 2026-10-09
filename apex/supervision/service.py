@@ -24,6 +24,7 @@ from ..config import Config, secrets
 from ..db import DB
 from ..reporting import bulletin as BU
 from ..reporting import exit_board as EB
+from ..reporting import consistency as CO
 from ..reporting import entry_audit as EA
 from ..trading import evolve as EV
 from ..trading.exits import build_panel
@@ -596,6 +597,7 @@ class Supervisor:
         last_report = 0.0
         last_board = 0.0
         last_entry_audit = 0.0
+        last_consistency = time.time() - 3 * 3600 + 900      # 1re vérification 15 min après le démarrage
         while True:
             try:
                 await self.cycle()
@@ -619,6 +621,22 @@ class Supervisor:
                 await self.bus.r.set("apex:report:tech", await self.reporter.build(6))
                 last_report = now
             await self.bulletin_if_due()
+            # cohérence des résultats (trades recalculés, ventes au vrai prix, simulateur aligné) : toutes les 3 h
+            if now - last_consistency >= 3 * 3600:
+                last_consistency = now
+                try:
+                    res = await CO.run(self.db, 24)
+                    await self.bus.set_json("apex:consistency", {**res, "ts": time.time()})
+                    await self.db.log_event("info" if res["ok"] else "warning", "coherence", res["resume"])
+                    last_alert = float(await self.bus.r.get("apex:consistency:alerted") or 0)
+                    if not res["ok"] and time.time() - last_alert > 6 * 3600:
+                        await self.bus.r.set("apex:consistency:alerted", str(time.time()))
+                        await self.notify_now(
+                            "🔎 <b>Vérification automatique des résultats</b> : quelque chose ne colle pas.\n• "
+                            + "\n• ".join(res["problemes"])
+                            + "\nLes résultats d'entraînement concernés sont peut-être faux. Le suivi Claude Code va regarder.")
+                except Exception:  # noqa: BLE001
+                    log.exception("vérification de cohérence")
             # audit de l'entrée (quels indices prédisent, calibration) : toutes les 6 h
             if now - last_entry_audit >= 21600:
                 last_entry_audit = now

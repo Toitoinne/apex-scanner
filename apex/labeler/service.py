@@ -220,24 +220,8 @@ class LabelerService:
         # refermés au prix d'achat et leur vrai résultat — ex. −50 % — était écrasé par −2,5 %)
         done = {r["decision_id"] for r in await self.db.fetch(
             "SELECT decision_id FROM paper_positions WHERE status='closed' AND opened_at > now() - interval '6 hours'")}
-        for ev in events:
-            if isinstance(ev, dict) and "decision_id" in ev and "policy" in ev:
-                if ev["decision_id"] not in done:
-                    self.engine.open_position(ev)
-            else:
-                self.engine.on_event(ev)
-        kept = [h for h in self.engine.heap if h[0] > last_ts or h[2] == OUT]
-        dropped = len(self.engine.heap) - len(kept)
-        heapq.heapify(kept)
-        self.engine.heap = kept
-        for tr in self.engine.tracks.values():
-            tr.pending = 0
-        for _, did, _ in kept:
-            d = self.engine.decisions.get(did)
-            if d and d.mint in self.engine.tracks:
-                self.engine.tracks[d.mint].pending += 1
-        outcomes, _signals = self.engine.drain()          # signaux déjà envoyés avant l'arrêt
-        self.engine.outcomes = outcomes                    # outcomes republiés (dédupliqués en aval)
+        kept_n, dropped = self.engine.restore(events, last_ts, done)
+        kept = range(kept_n)
         restored = 0
         for r in await self.db.fetch("SELECT decision_id, mint, symbol, policy, state FROM paper_positions WHERE status='open'"):
             if r["decision_id"] not in self.engine.positions and r["policy"] in self.engine.policies:

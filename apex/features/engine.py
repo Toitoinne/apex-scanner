@@ -154,6 +154,19 @@ class FeatureEngine:
             st.due["vague2"] = ts
             heapq.heappush(self.heap, (ts, st.mint, "vague2"))
 
+    def mark_elapsed(self, last_ts: float) -> None:
+        """Après le rejeu d'un redémarrage : tous les points de décision échus avant l'arrêt sont considérés
+        comme déjà traités (ils ont été publiés avant l'arrêt, ou sont trop vieux pour être honnêtes)."""
+        for st in self.states.values():
+            for s in self.points:
+                if st.t0 + s <= last_ts:
+                    st.emitted_points.add(str(s))
+            if st.migrated_ts:
+                st.emitted_points.add("migration")
+            for pt, due in st.due.items():          # points d'étude (après migration, 2e vague)
+                if due <= last_ts:
+                    st.emitted_points.add(pt)
+
     def mark_candidate(self, mint: str) -> None:
         if mint in self.states and mint not in self.candidates:
             self.candidates.add(mint)
