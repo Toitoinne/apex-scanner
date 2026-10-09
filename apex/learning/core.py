@@ -20,6 +20,7 @@ from ..errors.classifier import DynamicRule, ErrorRecord, classify
 from ..events import Decision, Label, Outcome
 from ..ingestor.watchdog import overlaps_gap
 from .ensemble import HorizonEnsemble
+from ..trading.exits import build_panel
 from .models import CompetitorSpec, train_lgbm
 
 log = logging.getLogger(__name__)
@@ -75,7 +76,10 @@ class Learner:
     def _new_bandit(self) -> AlertBandit:
         b = self.cfg.data["bandit"]
         scores = {k: v["thresholds"] for k, v in b.get("scores", {"x2": {"thresholds": b["thresholds"]}}).items()}
-        policies = b.get("policies") or list(self.cfg.data.get("exits", {}).get("policies", {})) or ["TP2_SL50"]
+        allp = build_panel(self.cfg.data.get("exits", {}))
+        policies = b.get("policies") or ["TP2_SL50"]
+        if policies == "all":
+            policies = list(allp)
         return AlertBandit(scores_cfg=scores, points=[str(p) for p in b["decision_points"]], policies=policies,
                            alerts_min=b["alerts_per_day"]["min"], alerts_max=b["alerts_per_day"]["max"],
                            discount=b["discount"])
@@ -147,7 +151,7 @@ class Learner:
         d = dc.d
         fee = self.cfg.get("fees.pumpswap_fee_bps") if d.meta.get("migrated") else self.cfg.get("fees.pump_fee_bps")
         arm = self.bandit.active_arm()
-        pol_cfg = self.cfg.get(f"exits.policies.{arm.policy}") or {}
+        pol_cfg = build_panel(self.cfg.data.get("exits", {})).get(arm.policy) or {}
         return {
             "decision_id": d.decision_id, "mint": d.mint, "point": d.point, "ts": d.ts,
             "entry_price": d.entry_price, "v_sol": d.v_sol, "v_tokens": d.v_tokens,

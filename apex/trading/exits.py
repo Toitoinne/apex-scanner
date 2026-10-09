@@ -29,6 +29,9 @@ class Policy:
     learned_exit: bool = False                        # vend quand le modèle de sortie juge la hausse finie
     hold_threshold: float = 0.35                      # … c.-à-d. quand P(nouvelle hausse) < ce seuil
     min_hold_s: float = 30                            # jamais avant ce délai après l'achat
+    time_stop_s: float = 0                            # sortie « au temps » : à ce délai, si pas assez monté…
+    time_stop_mult: float = 0                         # … (moins de +X % et aucun palier encaissé) → on sort
+    breakeven_at: float = 0                           # dès ce multiple atteint, le stop remonte au prix d'entrée
 
     @classmethod
     def from_cfg(cls, name: str, c: dict) -> "Policy":
@@ -36,7 +39,9 @@ class Policy:
                    trail=c.get("trail"), trail_activate=c.get("trail_activate", 1.0e9),
                    danger_exit=c.get("danger_exit", True), time_limit_s=c.get("time_limit_s", 86400),
                    description=c.get("description", ""), learned_exit=c.get("learned_exit", False),
-                   hold_threshold=c.get("hold_threshold", 0.35), min_hold_s=c.get("min_hold_s", 30))
+                   hold_threshold=c.get("hold_threshold", 0.35), min_hold_s=c.get("min_hold_s", 30),
+                   time_stop_s=c.get("time_stop_s", 0), time_stop_mult=c.get("time_stop_mult", 0),
+                   breakeven_at=c.get("breakeven_at", 0))
 
 
 @dataclass
@@ -51,7 +56,7 @@ class Action:
     reason: str = ""
 
 
-@dataclass
+@dataclass(slots=True)
 class PolicyState:
     policy_name: str
     entry: float
@@ -65,6 +70,8 @@ class PolicyState:
     closed: bool = False
     last_price: float = 0.0
     last_t: float = 0.0
+    sale_cost: float = 0.0            # coût fixe par vente (frais de réseau), en fraction de la mise initiale
+    time_checked: bool = False
 
     def pnl(self) -> float:
         """PnL réalisé + latent (marqué au dernier prix), en fraction de la mise."""
@@ -73,7 +80,7 @@ class PolicyState:
 
     def _sell(self, fraction: float, price: float) -> None:
         fraction = min(fraction, self.remaining)
-        self.realized += fraction * (price / self.entry) * (1 - self.fee)
+        self.realized += fraction * (price / self.entry) * (1 - self.fee) - self.sale_cost
         self.remaining -= fraction
         if self.remaining <= 1e-9:
             self.remaining = 0.0
@@ -109,8 +116,14 @@ class PolicyState:
         if self.trailing and p.trail is not None:
             if price <= self.peak * (1 - p.trail):
                 act("STOP_SUIVEUR", self.remaining, f"−{p.trail:.0%} depuis x{self.peak / self.entry:.2f}")
+        elif p.breakeven_at and self.peak / self.entry >= p.breakeven_at and mult <= 1.0:
+            act("STOP", self.remaining, "retour au prix d'entrée")
         elif mult <= 1 - p.stop_loss:
             act("STOP", self.remaining)
+        if (not self.closed and p.time_stop_s and not self.time_checked and t - self.t0 >= p.time_stop_s):
+            self.time_checked = True
+            if self.tp_idx == 0 and mult < 1 + p.time_stop_mult:
+                act("TEMPS", self.remaining, f"moins de +{p.time_stop_mult:.0%} après {p.time_stop_s / 60:g} min")
         if (not self.closed and p.learned_exit and hold_p is not None and t - self.t0 >= p.min_hold_s
                 and hold_p < p.hold_threshold):
             act("APPRIS", self.remaining, f"chances de nouvelle hausse {hold_p:.0%}")
@@ -148,6 +161,60 @@ def simulate(p: Policy, path: list[tuple[float, float]], entry: float, t0: float
         if st.closed:
             break
     return st
+
+
+def build_panel(ex: dict) -> dict[str, dict]:
+    """Toutes les stratégies de sortie testées : celles écrites dans la config + un PANEL généré
+    (exits.panel) qui couvre les grandes familles. Chacune est simulée sur chaque décision alertable ;
+    le bandit garde celles qui rapportent vraiment."""
+    pols = dict(ex.get("policies", {}))
+    pan = ex.get("panel") or {}
+    if not pan.get("enabled"):
+        return pols
+
+    def add(name: str, c: dict) -> None:
+        pols.setdefault(name, c)
+
+    fast = pan.get("fast_time_limit_s", 7200)
+    for tp in pan.get("tp", [1.3, 1.5, 2.0, 3.0]):                       # 1. tout vendre à un objectif
+        for sl in pan.get("sl", [0.2, 0.35, 0.5]):
+            add(f"OBJECTIF_X{tp:g}_STOP{int(round(sl * 100))}",
+                {"stop_loss": sl, "take_profits": [[tp, 1.0]], "time_limit_s": fast,
+                 "description": f"tout vendre à x{tp:g}, stop −{sl:.0%}"})
+    for ts in pan.get("time_stop_s", [120, 300, 900]):                     # 2. sortie au temps
+        for need in pan.get("time_stop_need", [0.1, 0.25]):
+            add(f"TEMPS_{ts // 60}MIN_{int(round(need * 100))}",
+                {"stop_loss": 0.35, "take_profits": [[2.0, 0.5]], "trail": 0.3, "trail_activate": 1.5,
+                 "time_stop_s": ts, "time_stop_mult": need, "time_limit_s": 86400,
+                 "description": f"sortir s'il n'a pas pris +{need:.0%} après {ts // 60} min ; "
+                                f"sinon moitié à x2 et stop suiveur −30 %"})
+    for tr in pan.get("trail", [0.15, 0.25, 0.35, 0.5]):                  # 3. stop suiveur pur
+        for actv in pan.get("trail_activate", [1.0, 1.5]):
+            add(f"SUIVEUR{int(round(tr * 100))}_DES_X{actv:g}",
+                {"stop_loss": 0.35, "take_profits": [], "trail": tr, "trail_activate": actv, "time_limit_s": 86400,
+                 "description": f"stop suiveur −{tr:.0%} dès x{actv:g} (stop −35 % avant)"})
+    for be in pan.get("breakeven_at", [1.3, 1.5]):                         # 4. sécuriser la mise
+        add(f"SECURISE_X{be:g}",
+            {"stop_loss": 0.35, "take_profits": [[3.0, 1.0]], "trail": 0.4, "trail_activate": 2.0, "breakeven_at": be,
+             "time_limit_s": 86400,
+             "description": f"stop remonté au prix d'entrée dès x{be:g}, tout vendre à x3, stop suiveur −40 % après x2"})
+    for name, (tps, tr) in {"PALIERS_RAPIDES": ([[1.5, 0.34], [3.0, 0.33]], 0.4),     # 5. paliers
+                            "PALIERS_LARGES": ([[2.0, 0.5], [5.0, 0.25]], 0.5),
+                            "MOITIE_X1.3": ([[1.3, 0.5]], 0.25)}.items():
+        add(name, {"stop_loss": 0.35, "take_profits": tps, "trail": tr, "trail_activate": tps[0][0],
+                   "time_limit_s": 86400,
+                   "description": " puis ".join(f"{f:.0%} à x{m:g}" for m, f in tps) + f", reste en stop suiveur −{tr:.0%}"})
+    for thr in pan.get("learned_thresholds", [0.25, 0.5]):                 # 6. sortie apprise, plus ou moins prudente
+        k = int(round(thr * 100))
+        add(f"SORTIE_APPRISE_{k}",
+            {"stop_loss": 0.5, "take_profits": [[2.0, 0.5]], "trail": 0.5, "trail_activate": 2.0, "time_limit_s": 86400,
+             "learned_exit": True, "hold_threshold": thr, "min_hold_s": 30,
+             "description": f"récupérer la mise à x2, puis vendre quand ses chances de hausse passent sous {thr:.0%}"})
+        add(f"SORTIE_APPRISE_LIBRE_{k}",
+            {"stop_loss": 0.5, "take_profits": [], "trail": 0.5, "trail_activate": 3.0, "time_limit_s": 86400,
+             "learned_exit": True, "hold_threshold": thr, "min_hold_s": 30,
+             "description": f"tout garder, tout vendre quand ses chances de hausse passent sous {thr:.0%}"})
+    return pols
 
 
 class DangerDetector:

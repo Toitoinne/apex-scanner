@@ -83,7 +83,8 @@ GLOSSAIRE = (
     "• <b>Rug / arnaque</b> : le créateur revend tout d'un coup et le prix s'effondre.\n"
     "• <b>Suivi Claude Code</b> : 4 fois par jour, une IA vérifie le bot, corrige et améliore son code.\n\n"
     "<b>Commandes utiles</b>\n"
-    "/bilan — le point maintenant · /trading — où il en est avant l'argent réel · /paper — ses trades simulés\n"
+    "/bilan — le point maintenant · /sorties — classement des façons de revendre\n"
+    "/trading — où il en est avant l'argent réel · /paper — ses trades simulés\n"
     "/tech — rapport technique détaillé · /pause et /reprendre — couper les alertes"
 )
 
@@ -183,6 +184,12 @@ def render(d: dict, title: str) -> str:
             trend = "↗ en progrès" if delta > 0.01 else ("↘ en léger recul" if delta < -0.01 else "→ stable")
             txt += f" (hier {prev:.0%}, {trend})"
         lines.append(txt)
+    best = d.get("best_exit")
+    if best:
+        verdict = {"solide": "gagne de façon prouvée", "pas prouvée": "pas encore prouvée",
+                   "perd": "perd encore de l'argent"}.get(best["verdict"], "")
+        lines.append(f"• Meilleure façon de revendre en ce moment ({best['n_testees']} testées) : {e(best['description'])} — "
+                     f"{best['mean']:+.1%} par trade, {verdict} (/sorties)".replace(".", ",", 1))
     ex = d.get("exit_model") or {}
     if ex.get("situations_apprises"):
         if ex.get("pret") and ex.get("fiabilite") is not None:
@@ -250,6 +257,9 @@ async def gather(db: Any, bus: Any, cfg: Any, hours: int, record: bool = True) -
     d["skill_prev"] = await skill_history(bus, d["skill"] if record else None)
     d["trading"] = await bus.get_json("apex:trading:status", {}) or {}
     d["criteria"] = cfg.get("trading.criteria") or {}
+    board = await bus.get_json("apex:exits:board", {}) or {}
+    sel = board.get("selection") or []
+    d["best_exit"] = {**sel[0], "n_testees": len(board.get("toutes") or sel)} if sel else None
     d["exit_model"] = ((await bus.get_json("apex:labeler:stats", {}) or {}).get("sortie_apprise") or {})
     d["problems"] = await health_problems(bus)
     return d

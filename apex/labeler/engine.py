@@ -16,7 +16,7 @@ from typing import Any
 
 from ..events import Decision, Label, Migration, Outcome, PriceTick, TokenCreated, Trade
 from ..trading.exit_model import ExitLearner, ExitTrackState
-from ..trading.exits import DangerDetector, Policy, PolicyState
+from ..trading.exits import DangerDetector, Policy, PolicyState, build_panel
 from ..trading.pricefilter import PriceGuard
 from .labels import outcome, simulated_trade
 
@@ -82,7 +82,11 @@ class LabelerEngine:
         self.idle_close = cfg["token_idle_close_s"]
         ex = cfg.get("exits", {})
         self.exit_fee = ex.get("fee", 0.02)
-        self.policies = {n: Policy.from_cfg(n, c) for n, c in ex.get("policies", {}).items()}
+        self.policies = {n: Policy.from_cfg(n, c) for n, c in build_panel(ex).items()}
+        self.sale_cost = ex.get("sale_cost", 0.0)
+        self.min_buyers = cfg.get("bandit", {}).get("min_buyers_to_alert", 0)
+        self.idle_finalize_s = ex.get("idle_finalize_s", 1800)
+        self._last_idle_sweep = 0.0
         self.outcome_horizon = max([p.time_limit_s for p in self.policies.values()] + [3600])
         self.tracks: dict[str, Track] = {}
         self.decisions: dict[str, SlimDecision] = {}
@@ -192,8 +196,12 @@ class LabelerEngine:
         for h, c in self.lcfg.items():
             heapq.heappush(self.heap, (d.ts + c["horizon_s"], d.decision_id, h))
             tr.pending += 1
-        if self.policies:
-            tr.sims[d.decision_id] = {n: PolicyState(n, d.entry_price, d.ts, self.exit_fee) for n in self.policies}
+        # toutes les stratégies sont simulées sur les décisions ALERTABLES (les seules qui comptent pour
+        # choisir la stratégie) ; les décisions reprises depuis la base (features vides) le sont déjà
+        alertable = not d.features or (not d.blocked and d.features.get("unique_buyers", 0) >= self.min_buyers)
+        if self.policies and alertable:
+            tr.sims[d.decision_id] = {n: PolicyState(n, d.entry_price, d.ts, self.exit_fee, sale_cost=self.sale_cost)
+                                      for n in self.policies}
             heapq.heappush(self.heap, (d.ts + self.outcome_horizon, d.decision_id, OUT))
             tr.pending += 1
 
@@ -206,7 +214,8 @@ class LabelerEngine:
         entry = d.entry_price if d else alert.get("entry_price")
         if not entry:
             return
-        self.positions[did] = Position(did, alert["mint"], pol, PolicyState(pol, entry, alert["ts"], self.exit_fee),
+        self.positions[did] = Position(did, alert["mint"], pol, PolicyState(pol, entry, alert["ts"], self.exit_fee,
+                                                                            sale_cost=self.sale_cost),
                                        alert.get("symbol") or "")
 
     def _finalize(self, did: str, now: float) -> None:
@@ -258,6 +267,14 @@ class LabelerEngine:
             ))
             tr.any_rug |= o.rug
             tr.any_winner |= (h == "L60" and y == 1)
+        # token mort (plus aucun échange depuis 30 min) : les simulations sont soldées au dernier prix, comme
+        # elles le seraient à 24 h — le résultat arrive plus tôt et la mémoire est libérée
+        if now - self._last_idle_sweep >= 60:
+            self._last_idle_sweep = now
+            for tr in list(self.tracks.values()):
+                if tr.sims and tr.times and now - tr.times[-1] > self.idle_finalize_s:
+                    for did in list(tr.sims):
+                        self._finalize(did, now)
         # positions suivies au-delà de leur limite de temps sans nouveau prix : clôture au dernier prix
         for pos in self.positions.values():
             p = self.policies.get(pos.policy)

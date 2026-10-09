@@ -203,7 +203,7 @@ class LearnerService:
                     await self.db.log_event("info", "champion", msg)
             if now - last_bandit >= c.get("bandit.resample_every_s"):
                 arm = self.learner.bandit.resample()
-                await self.db.log_event("info", "bandit", f"bras actif {arm.key}", {"mean": arm.mean(), "rate": arm.alerts_per_day()})
+                await self.db.log_event("info", "bandit", f"bras actif {arm.key}", {"mean": arm.mean(), "rate": self.learner.bandit.apd(arm)})
         if now - last_lgbm >= c.get("models.lgbm_every_s"):
             for h in self.learner.horizons:
                 async with self._lock:

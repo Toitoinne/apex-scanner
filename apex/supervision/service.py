@@ -22,6 +22,7 @@ from .. import bus as B
 from ..config import Config, secrets
 from ..db import DB
 from ..reporting import bulletin as BU
+from ..reporting import exit_board as EB
 from ..reporting.reports import Reporter
 from .corrections import Plan, build_plan, candidates_for
 from .detector import ABNORMAL, Detected, Detector
@@ -548,6 +549,7 @@ class Supervisor:
         last_claude = float(last_db) if last_db else time.time() - self.cfg.get("claude.cycle_s")
         last_claude_check = 0.0
         last_report = 0.0
+        last_board = 0.0
         while True:
             try:
                 await self.cycle()
@@ -571,6 +573,13 @@ class Supervisor:
                 await self.bus.r.set("apex:report:tech", await self.reporter.build(6))
                 last_report = now
             await self.bulletin_if_due()
+            # classement des stratégies de sortie (marge d'incertitude, stabilité) : toutes les heures
+            if now - last_board >= 3600:
+                last_board = now
+                try:
+                    await self.bus.set_json("apex:exits:board", await EB.build(self.db, self.cfg, 48))
+                except Exception:  # noqa: BLE001
+                    log.exception("classement des stratégies de sortie")
             await asyncio.sleep(self.s["cycle_s"])
 
 
