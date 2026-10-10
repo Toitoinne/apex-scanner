@@ -78,6 +78,25 @@ def is_late(last_slot: dict[str, int], ev: Any, tolerance: int) -> bool:
     return False
 
 
+def fix_late_price(last_slot: dict[str, int], reserves: dict[str, tuple[float, float]], ev: Any,
+                   tolerance: int) -> bool:
+    """Trade en retard : ses réserves (donc son prix) sont remplacées par les dernières connues du token.
+    Retourne True si le trade était en retard."""
+    late = is_late(last_slot, ev, tolerance)
+    if not isinstance(ev, Trade):
+        return late
+    if late:
+        r = reserves.get(ev.mint)
+        if r:
+            ev.v_sol, ev.v_tokens = r
+    elif ev.v_sol and ev.v_tokens:
+        reserves[ev.mint] = (ev.v_sol, ev.v_tokens)
+        if len(reserves) > 200_000:
+            for m in list(reserves)[:100_000]:
+                del reserves[m]
+    return late
+
+
 def expand_ws_urls(urls: list[str], copies: int) -> list[str]:
     """Le RPC public sature : il prend du retard puis coupe la connexion toutes les 1–2 min, et la
     file en attente côté serveur est perdue (~10 % des trades par connexion, mesuré le 09/10).
@@ -97,6 +116,7 @@ class Ingestor:
         self.stats: dict[str, Any] = {"events": 0, "dupes": 0, "late": 0, "reconnects": 0, "bytes": {}}
         self.late_slots = ing.get("late_slots", 4)
         self._mint_slot: dict[str, int] = {}
+        self._mint_reserves: dict[str, tuple[float, float]] = {}
         self._t_start = time.time()
         self._pp_ws: Any = None
         self._ws: dict[str, Any] = {}
@@ -123,11 +143,11 @@ class Ingestor:
         if not await self.dedupe.first_time(ev):
             self.stats["dupes"] += 1
             return
-        if is_late(self._mint_slot, ev, self.late_slots):
-            # livré en retard par une connexion lente : le bot le daterait « maintenant » avec un prix
-            # vieux de plusieurs secondes (ex. 09/10 : achats de la création reçus 22 s après → faux krach −76 %)
+        if fix_late_price(self._mint_slot, self._mint_reserves, ev, self.late_slots):
+            # livré en retard par une connexion lente : daté « maintenant », son prix serait vieux de plusieurs
+            # secondes (ex. 09/10 : achats de la création reçus 22 s après → faux krach −76 %). Il est gardé
+            # (acheteurs, volumes) mais porte le dernier prix connu du token.
             self.stats["late"] += 1
-            return
         self.stats["events"] += 1
         await self.bus.publish(B.RAW, ev, maxlen=self.maxlen)
 
