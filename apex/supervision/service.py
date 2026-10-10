@@ -190,7 +190,12 @@ class Supervisor:
                 problems.append("aucune nouvelle décision depuis plus de 5 min (flux ou calcul des features à l'arrêt)")
             if now - (st.get("last_label_ts") or now) > 600:
                 problems.append("aucun nouveau label appris depuis plus de 10 min (boucle 1 à l'arrêt)")
-            if prev and now - prev["ts"] >= 3000 and st.get("n_outcomes", 0) <= prev["n_outcomes"]:
+            n_out = st.get("n_outcomes", 0)
+            if prev and n_out < prev["n_outcomes"]:
+                # compteur revenu en arrière = learner redémarré depuis un snapshot plus ancien :
+                # pas une panne, on repart d'une nouvelle référence (sinon fausse alerte 1 h plus tard)
+                prev = None
+            if prev and now - prev["ts"] >= 3000 and n_out <= prev["n_outcomes"]:
                 problems.append("le bandit n'a reçu aucune récompense depuis ~1 h (simulations de sortie à l'arrêt)")
             if not prev or now - prev["ts"] >= 3000:
                 self._health_prev = {"ts": now, "n_outcomes": st.get("n_outcomes", 0)}
