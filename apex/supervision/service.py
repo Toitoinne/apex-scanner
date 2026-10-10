@@ -39,6 +39,20 @@ from ..trading import readiness as R
 log = logging.getLogger("supervisor")
 SEVERITY = ["REGRESSION", "SEUIL_PERMISSIF", "REGRESSION_TYPE", "DECALIBRATION", "DERIVE_MARCHE", "SEUIL_STRICT", "PLATEAU"]
 UNFREEZE_AFTER_H = 24
+TASK_TIMEOUT_S = 600     # délai maximal d'une tâche du superviseur (une requête bloquée ne fige plus la boucle)
+
+
+async def bounded(name: str, aw: Any, timeout: float | None = None) -> Any:
+    """Exécute une tâche avec un délai maximal ; en cas de dépassement ou d'erreur : journal + None.
+    L'annulation interrompt aussi la requête PostgreSQL en cours (asyncpg envoie l'annulation au serveur)."""
+    timeout = TASK_TIMEOUT_S if timeout is None else timeout
+    try:
+        return await asyncio.wait_for(aw, timeout)
+    except asyncio.TimeoutError:
+        log.error("%s : abandon après %.1f s (tâche bloquée)", name, timeout)
+    except Exception:  # noqa: BLE001
+        log.exception("%s", name)
+    return None
 
 
 class Supervisor:
@@ -604,10 +618,7 @@ class Supervisor:
         last_entry_audit = 0.0
         last_consistency = time.time() - 3 * 3600 + 900      # 1re vérification 15 min après le démarrage
         while True:
-            try:
-                await self.cycle()
-            except Exception:  # noqa: BLE001
-                log.exception("cycle de supervision")
+            await bounded("cycle de supervision", self.cycle())
             now = time.time()
             if self.improver is not None and now - last_claude_check >= 6 * 3600:
                 B.spawn(self.improver.health_check())     # crédit / clé API Claude
@@ -623,42 +634,43 @@ class Supervisor:
                     B.spawn(self.improver.run(trigger="AUTRE_EN_HAUSSE", problem_type="error_rate:AUTRE", diagnosis={}, supervisor=self))
             # rapport technique : gardé pour /tech (plus envoyé d'office)
             if now - last_report >= self.cfg.get("reports.every_s"):
-                await self.bus.r.set("apex:report:tech", await self.reporter.build(6))
                 last_report = now
-            await self.bulletin_if_due()
+                tech = await bounded("rapport technique", self.reporter.build(6))
+                if tech is not None:
+                    await self.bus.r.set("apex:report:tech", tech)
+            await bounded("bulletin", self.bulletin_if_due())
             # cohérence des résultats (trades recalculés, ventes au vrai prix, simulateur aligné) : toutes les 3 h
             if now - last_consistency >= 3 * 3600:
                 last_consistency = now
-                try:
-                    res = await CO.run(self.db, 24)
-                    await self.bus.set_json("apex:consistency", {**res, "ts": time.time()})
-                    await self.db.log_event("info" if res["ok"] else "warning", "coherence", res["resume"])
-                    last_alert = float(await self.bus.r.get("apex:consistency:alerted") or 0)
-                    if not res["ok"] and time.time() - last_alert > 6 * 3600:
-                        await self.bus.r.set("apex:consistency:alerted", str(time.time()))
-                        await self.notify_now(
-                            "🔎 <b>Vérification automatique des résultats</b> : quelque chose ne colle pas.\n• "
-                            + "\n• ".join(res["problemes"])
-                            + "\nLes résultats d'entraînement concernés sont peut-être faux. Le suivi Claude Code va regarder.")
-                except Exception:  # noqa: BLE001
-                    log.exception("vérification de cohérence")
+                await bounded("vérification de cohérence", self.consistency_check())
             # audit de l'entrée (quels indices prédisent, calibration) : toutes les 6 h
             if now - last_entry_audit >= 21600:
                 last_entry_audit = now
-                try:
-                    await self.bus.set_json("apex:entry:audit", await EA.run(self.db, self.cfg, 48))
-                except Exception:  # noqa: BLE001
-                    log.exception("audit de l'entrée")
+                audit = await bounded("audit de l'entrée", EA.run(self.db, self.cfg, 48))
+                if audit is not None:
+                    await self.bus.set_json("apex:entry:audit", audit)
             # classement des stratégies de sortie (marge d'incertitude, stabilité) : toutes les heures
             if now - last_board >= 3600:
                 last_board = now
-                try:
-                    board = await EB.build(self.db, self.cfg, 48, await self.evolved())
-                    await self.bus.set_json("apex:exits:board", board)
-                    await self.evolve_exits(board)
-                except Exception:  # noqa: BLE001
-                    log.exception("classement / évolution des stratégies de sortie")
+                await bounded("classement / évolution des stratégies de sortie", self.exit_board())
             await asyncio.sleep(self.s["cycle_s"])
+
+    async def consistency_check(self) -> None:
+        res = await CO.run(self.db, 24)
+        await self.bus.set_json("apex:consistency", {**res, "ts": time.time()})
+        await self.db.log_event("info" if res["ok"] else "warning", "coherence", res["resume"])
+        last_alert = float(await self.bus.r.get("apex:consistency:alerted") or 0)
+        if not res["ok"] and time.time() - last_alert > 6 * 3600:
+            await self.bus.r.set("apex:consistency:alerted", str(time.time()))
+            await self.notify_now(
+                "🔎 <b>Vérification automatique des résultats</b> : quelque chose ne colle pas.\n• "
+                + "\n• ".join(res["problemes"])
+                + "\nLes résultats d'entraînement concernés sont peut-être faux. Le suivi Claude Code va regarder.")
+
+    async def exit_board(self) -> None:
+        board = await EB.build(self.db, self.cfg, 48, await self.evolved())
+        await self.bus.set_json("apex:exits:board", board)
+        await self.evolve_exits(board)
 
 
 async def main() -> None:
