@@ -50,6 +50,16 @@ class Deduper:
         return bool(await self.bus.r.set(f"apex:dedupe:{self.key(ev)}", b"1", nx=True, ex=self.ttl))
 
 
+def plan_pool_subs(wanted: set[str], subscribed: set[str], pending: set[str],
+                   budget: int) -> tuple[list[str], list[str]]:
+    """Abonnements PumpSwap à faire maintenant : au plus `budget` requêtes (désabonnements d'abord,
+    puis nouveaux pools). Le RPC public coupe la connexion (« Too many subscriptions attempted »)
+    si on lui envoie ~200 abonnements d'un coup : on étale donc sur plusieurs tours."""
+    unsub = sorted(subscribed - wanted)[:budget]
+    sub = sorted(wanted - subscribed - pending)[:max(0, budget - len(unsub))]
+    return unsub, sub
+
+
 def expand_ws_urls(urls: list[str], copies: int) -> list[str]:
     """Le RPC public sature : il prend du retard puis coupe la connexion toutes les 1–2 min, et la
     file en attente côté serveur est perdue (~10 % des trades par connexion, mesuré le 09/10).
@@ -74,6 +84,9 @@ class Ingestor:
             if "public_logs" in ing["sources"] else []
         self.free_urls = expand_ws_urls(urls, ing.get("connections_per_url", 1))
         self.stagger_s = ing.get("connection_stagger_s", 20)
+        # abonnements PumpSwap étalés (le RPC public refuse les rafales : ~40 requêtes / 10 s)
+        self.pumpswap_burst = ing.get("pumpswap_subs_per_round", 5)
+        self.pumpswap_gap_s = ing.get("pumpswap_sub_gap_s", 0.3)
         wd = ing.get("watchdog", {})
         self.wd = FlowWatchdog(log_sources=[f"ws{i}" for i in range(len(self.free_urls))],
                                stall_s=wd.get("stall_s", 30), backup_after_s=wd.get("backup_after_s", 15),
@@ -253,33 +266,39 @@ class Ingestor:
             pool_mint: dict[str, str] = {}
             req = 100
 
-            async def sync() -> None:
+            async def sync() -> bool:
+                """Un tour d'abonnements, à débit limité ; vrai s'il en reste à faire."""
                 nonlocal req
                 wanted = {d["pool"]: d["mint"] for d in (await self.bus.get_json("apex:pools:active", []) or [])}
                 pool_mint.update(wanted)
-                for pool in wanted.keys() - by_pool.keys() - set(pending.values()):
-                    req += 1
-                    pending[req] = pool
-                    await ws.send(orjson.dumps({"jsonrpc": "2.0", "id": req, "method": "logsSubscribe",
-                                                "params": [{"mentions": [pool]}, {"commitment": "processed"}]}).decode())
-                for pool in list(by_pool.keys() - wanted.keys()):
+                unsub, sub = plan_pool_subs(set(wanted), set(by_pool), set(pending.values()), self.pumpswap_burst)
+                for pool in unsub:
                     sid = by_pool.pop(pool)
                     subs.pop(sid, None)
                     req += 1
                     await ws.send(orjson.dumps({"jsonrpc": "2.0", "id": req, "method": "logsUnsubscribe",
                                                 "params": [sid]}).decode())
+                    await asyncio.sleep(self.pumpswap_gap_s)
+                for pool in sub:
+                    req += 1
+                    pending[req] = pool
+                    await ws.send(orjson.dumps({"jsonrpc": "2.0", "id": req, "method": "logsSubscribe",
+                                                "params": [{"mentions": [pool]}, {"commitment": "processed"}]}).decode())
+                    await asyncio.sleep(self.pumpswap_gap_s)
                 self.stats["pumpswap_pools"] = len(by_pool)
+                return len(wanted.keys() - by_pool.keys() - set(pending.values())) > 0 or bool(by_pool.keys() - wanted.keys())
 
-            await sync()
+            backlog = await sync()
             last_sync = time.time()
             log.info("pumpswap actif")
             while True:
+                every = 3.0 if backlog else 15.0
                 try:
-                    msg = await asyncio.wait_for(ws.recv(), timeout=15)
+                    msg = await asyncio.wait_for(ws.recv(), timeout=max(0.5, last_sync + every - time.time()))
                 except asyncio.TimeoutError:
                     msg = None
-                if time.time() - last_sync > 15:
-                    await sync()
+                if time.time() - last_sync >= every:
+                    backlog = await sync()
                     last_sync = time.time()
                 if msg is None:
                     continue
