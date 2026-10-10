@@ -17,6 +17,7 @@ ingestion:
   # pumpswap : trades PumpSwap des seuls pools suivis (tokens migrés), abonnement dynamique
   sources: [public_logs, pumpportal, pumpswap]
   pump_program_id: "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+  late_slots: 4                     # trade plus vieux de 4 slots (~1,6 s) que le dernier reçu pour ce token : ignoré (prix périmé)
   pumpportal_trades: false          # true = abonnement trades PumpPortal (payant)
   # Voie rapide : abonnement Helius (temps réel, complet) aux seuls tokens candidats / en position.
   # Mesuré : flux public ≈ 3 s de retard (p90 5,7 s) et ~15 % de transactions manquées ; Helius ≈ 0 s.

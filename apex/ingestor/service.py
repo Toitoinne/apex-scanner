@@ -60,6 +60,24 @@ def plan_pool_subs(wanted: set[str], subscribed: set[str], pending: set[str],
     return unsub, sub
 
 
+def is_late(last_slot: dict[str, int], ev: Any, tolerance: int) -> bool:
+    """Vrai si l'événement est plus ancien de plus de `tolerance` slots (~0,4 s chacun) que le plus récent
+    déjà reçu pour ce token. Met à jour le slot de référence sinon. Sans slot (PumpPortal) : jamais en retard."""
+    slot = getattr(ev, "slot", 0) or 0
+    mint = getattr(ev, "mint", None)
+    if not slot or not mint:
+        return False
+    ref = last_slot.get(mint, 0)
+    if slot < ref - tolerance:
+        return True
+    if slot > ref:
+        last_slot[mint] = slot
+        if len(last_slot) > 200_000:            # mémoire bornée : on oublie les tokens les plus anciens
+            for m in list(last_slot)[:100_000]:
+                del last_slot[m]
+    return False
+
+
 def expand_ws_urls(urls: list[str], copies: int) -> list[str]:
     """Le RPC public sature : il prend du retard puis coupe la connexion toutes les 1–2 min, et la
     file en attente côté serveur est perdue (~10 % des trades par connexion, mesuré le 09/10).
@@ -76,7 +94,9 @@ class Ingestor:
         self.dedupe = Deduper(bus, ing["dedupe_ttl_s"])
         self.backoff = ing["reconnect_backoff_s"]
         self.maxlen = ing["stream_maxlen"]
-        self.stats: dict[str, Any] = {"events": 0, "dupes": 0, "reconnects": 0, "bytes": {}}
+        self.stats: dict[str, Any] = {"events": 0, "dupes": 0, "late": 0, "reconnects": 0, "bytes": {}}
+        self.late_slots = ing.get("late_slots", 4)
+        self._mint_slot: dict[str, int] = {}
         self._t_start = time.time()
         self._pp_ws: Any = None
         self._ws: dict[str, Any] = {}
@@ -102,6 +122,11 @@ class Ingestor:
             return
         if not await self.dedupe.first_time(ev):
             self.stats["dupes"] += 1
+            return
+        if is_late(self._mint_slot, ev, self.late_slots):
+            # livré en retard par une connexion lente : le bot le daterait « maintenant » avec un prix
+            # vieux de plusieurs secondes (ex. 09/10 : achats de la création reçus 22 s après → faux krach −76 %)
+            self.stats["late"] += 1
             return
         self.stats["events"] += 1
         await self.bus.publish(B.RAW, ev, maxlen=self.maxlen)
