@@ -314,13 +314,17 @@ class Learner:
         return any(mp.get(q, 0) >= thr for q in order[i + 1:])
 
     def _evict(self, now: float) -> None:
-        if len(self.long_store) > 50_000 and int(now) % 60 == 0:
-            for did in [k for k, v in self.long_store.items() if now - v["ts"] > 26 * 3600]:
-                self.long_store.pop(did, None)
-        if len(self.cache) < 200_000:
+        """Oubli des décisions dont les résultats ne viendront plus (un label perdu pendant un redémarrage
+        laissait l'entrée en mémoire pour toujours : 49 000 entrées de ~19 Ko, le learner tué faute de mémoire).
+        Nettoyage chaque minute, sans attendre un seuil de taille."""
+        if now - getattr(self, "_last_evict", 0.0) < 60:
             return
-        for did in [k for k, v in self.cache.items() if now - v.d.ts > 7200]:
+        self._last_evict = now
+        short_max = max((self.cfg.get(f"labels.{h}.horizon_s", 3600) for h in self.short), default=3600)
+        for did in [k for k, v in self.cache.items() if now - v.d.ts > short_max + 3600]:
             self.cache.pop(did, None)
+        for did in [k for k, v in self.long_store.items() if now - v["ts"] > 26 * 3600]:
+            self.long_store.pop(did, None)
         if len(self.mint_preds) > 100_000:
             for m in list(self.mint_preds)[:50_000]:
                 self.mint_preds.pop(m, None)
