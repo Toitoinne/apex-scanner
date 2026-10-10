@@ -14,6 +14,7 @@ import heapq
 import logging
 import pickle
 import time
+from collections import deque
 from pathlib import Path
 
 import httpx
@@ -29,6 +30,8 @@ from .engine import OUT, LabelerEngine, Position
 log = logging.getLogger("labeler")
 GROUP = "labeler"
 WSOL = "So11111111111111111111111111111111111111112"
+# Résultats en attente de publication gardés au plus (Redis/PostgreSQL injoignable longtemps)
+BACKLOG_MAX = 300_000
 
 
 class LabelerService:
@@ -41,6 +44,10 @@ class LabelerService:
         self.notional = cfg.get("paper.notional_sol", 0.1)
         self._feed_stats = {"polls": 0, "ticks": 0, "errors": 0, "rejected": 0}
         self.guard = PriceGuard(cfg.get("pricefeed.max_jump", 5.0))
+        # Files d'attente de publication : un résultat n'en sort qu'une fois publié, pour qu'une
+        # coupure passagère de Redis ou de PostgreSQL ne perde ni label, ni récompense, ni vente.
+        self._q: dict[str, deque] = {k: deque() for k in
+                                     ("labels_db", "labels", "outcomes_db", "outcomes", "signals", "closed", "finals")}
 
     # ------------------------------------------------------------------
     async def consume(self, first: bool = True) -> None:
@@ -87,48 +94,88 @@ class LabelerService:
             await asyncio.sleep(0.25)
 
     async def publish(self, labels, closed, finals, outcomes, signals) -> None:
-        rows = []
-        for lb in labels:
-            await self.bus.publish(B.LABELS, lb)
-            rows.append((ts(lb.ts), lb.decision_id, lb.mint, lb.point, lb.horizon, lb.y, lb.max_return,
-                         lb.max_drawdown, lb.time_to_peak_s, lb.rug, lb.final_return, lb.sim_pnl))
-        if rows:
+        q = self._q
+        q["labels_db"].extend(labels)
+        q["labels"].extend(labels)
+        q["outcomes_db"].extend(outcomes)
+        q["outcomes"].extend(outcomes)
+        q["signals"].extend([sg, 0] for sg in signals)      # [signal, étapes déjà faites]
+        q["closed"].extend(closed)
+        q["finals"].extend(finals)
+        for name, d in q.items():
+            if len(d) > BACKLOG_MAX:
+                log.warning("file %s saturée : %d résultats anciens abandonnés", name, len(d) - BACKLOG_MAX)
+                for _ in range(len(d) - BACKLOG_MAX):
+                    d.popleft()
+        await self.flush_backlog()
+
+    async def flush_backlog(self) -> None:
+        """Publie les files dans l'ordre ; en cas d'erreur, le reste attend le tour suivant."""
+        q = self._q
+        if q["labels_db"]:
+            batch = list(q["labels_db"])
             await self.db.executemany(
                 """INSERT INTO labels (ts, decision_id, mint, point, horizon, y, max_return, max_drawdown,
-                   time_to_peak_s, rug, final_return, sim_pnl) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""", rows)
-        orow = []
-        for o in outcomes:
-            await self.bus.publish(B.OUTCOMES, o)
-            orow.append((o.decision_id, ts(o.ts), o.mint, o.point, o.pnl, o.max_return, o.reached))
-        if orow:
+                   time_to_peak_s, rug, final_return, sim_pnl) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+                [(ts(lb.ts), lb.decision_id, lb.mint, lb.point, lb.horizon, lb.y, lb.max_return,
+                  lb.max_drawdown, lb.time_to_peak_s, lb.rug, lb.final_return, lb.sim_pnl) for lb in batch])
+            for _ in batch:
+                q["labels_db"].popleft()
+        while q["labels"]:
+            await self.bus.publish(B.LABELS, q["labels"][0])
+            q["labels"].popleft()
+        if q["outcomes_db"]:
+            batch = list(q["outcomes_db"])
             await self.db.executemany(
                 """INSERT INTO outcomes (decision_id, ts, mint, point, pnl, max_return, reached)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (decision_id) DO NOTHING""", orow)
-        for s in signals:
-            await self.on_signal(s)
-        for c in closed:
-            await self.bus.publish(B.CLOSED, c)
-        for f in finals:
+                   VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (decision_id) DO NOTHING""",
+                [(o.decision_id, ts(o.ts), o.mint, o.point, o.pnl, o.max_return, o.reached) for o in batch])
+            for _ in batch:
+                q["outcomes_db"].popleft()
+        while q["outcomes"]:
+            await self.bus.publish(B.OUTCOMES, q["outcomes"][0])
+            q["outcomes"].popleft()
+        while q["signals"]:
+            await self.on_signal(*q["signals"][0], progress=q["signals"][0])
+            q["signals"].popleft()
+        while q["closed"]:
+            await self.bus.publish(B.CLOSED, q["closed"][0])
+            q["closed"].popleft()
+        while q["finals"]:
+            f = q["finals"][0]
             await self.db.execute(
                 "UPDATE tokens SET closed_at=now(), peak_mc_sol=$2, rugged=$3, outcome=$4 WHERE mint=$1",
                 f["mint"], f["peak_mc_sol"], f["rugged"], f["outcome"])
+            q["finals"].popleft()
 
-    async def on_signal(self, s: dict) -> None:
-        """Action sur une position alertée → signal de vente Telegram + paper trading."""
-        pos = self.engine.positions.get(s["decision_id"])
-        st = pos.state if pos else None
-        fill = {"t": s["t"], "kind": s["kind"], "fraction": round(s["fraction"], 4), "multiple": round(s["multiple"], 4),
-                "reason": s.get("reason", "")}
-        await self.db.execute(
-            """UPDATE paper_positions SET state=$2, fills = fills || $3::jsonb, pnl=$4, pnl_sol=$4 * notional_sol,
-               max_multiple=$5, status=$6, closed_at = CASE WHEN $6='closed' THEN now() ELSE closed_at END
-               WHERE decision_id=$1 AND status <> 'closed'""",
-            s["decision_id"], st.to_dict() if st else {}, [fill], s["pnl_after"],
-            (st.peak / st.entry) if st and st.entry else None, "closed" if s["closed"] else "open")
+    async def on_signal(self, s: dict, done: int = 0, progress: list | None = None) -> None:
+        """Action sur une position alertée → signal de vente Telegram + paper trading.
+
+        Trois étapes (base, système d'ordres, Telegram) ; `progress[1]` retient celles déjà faites
+        pour qu'une reprise après coupure ne compte pas deux fois la même vente.
+        """
+        def step_done(i: int) -> None:
+            if progress is not None:
+                progress[1] = i
+        if done < 1:
+            pos = self.engine.positions.get(s["decision_id"])
+            st = pos.state if pos else None
+            fill = {"t": s["t"], "kind": s["kind"], "fraction": round(s["fraction"], 4),
+                    "multiple": round(s["multiple"], 4), "reason": s.get("reason", "")}
+            await self.db.execute(
+                """UPDATE paper_positions SET state=$2, fills = fills || $3::jsonb, pnl=$4, pnl_sol=$4 * notional_sol,
+                   max_multiple=$5, status=$6, closed_at = CASE WHEN $6='closed' THEN now() ELSE closed_at END
+                   WHERE decision_id=$1 AND status <> 'closed'""",
+                s["decision_id"], st.to_dict() if st else {}, [fill], s["pnl_after"],
+                (st.peak / st.entry) if st and st.entry else None, "closed" if s["closed"] else "open")
+            step_done(1)
+        if done < 2:
+            await self.bus.publish(B.SIGNALS, s)                 # → système d'ordres
+            step_done(2)
         reason = DANGER_LABELS.get(s.get("reason", ""), s.get("reason", ""))
-        await self.bus.publish(B.SIGNALS, s)                 # → système d'ordres
         await self.bus.publish(B.NOTIFY, {"type": "sell_signal", **s, "reason_text": reason,
                                           "notional_sol": self.notional})
+        step_done(3)
 
     # ------------------------------------------------------------------
     async def pricefeed_loop(self) -> None:
