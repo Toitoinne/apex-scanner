@@ -15,6 +15,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from ..trading.evolve import short_desc
 from ..trading.exits import build_panel
 
 SQL = """
@@ -84,7 +85,7 @@ def rank(rows: list[dict], reference: str = "TP2_SL50", top_k: int = 5) -> list[
 
 
 async def build(db: Any, cfg: Any, hours: int = 48, evolved: dict | None = None) -> dict:
-    desc = {k: v.get("description", k) for k, v in build_panel(cfg.data.get("exits", {}), evolved).items()}
+    desc = {k: short_desc(v.get("description", k)) for k, v in build_panel(cfg.data.get("exits", {}), evolved).items()}
     res: dict = {"heures": hours}
     for key, only_top in (("toutes", False), ("selection", True)):
         rows = [dict(r) for r in await db.fetch_serial(SQL, hours, cfg.get("bandit.min_buyers_to_alert", 10),

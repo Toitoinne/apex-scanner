@@ -55,3 +55,25 @@ def test_new_variants_reach_labeler_and_bandit():
     assert any(a.policy == added[0] for a in lr.bandit.arms.values())
     lr.set_evolved({})
     assert not any(a.policy == added[0] for a in lr.bandit.arms.values())
+
+
+def test_grandchild_description_stays_readable():
+    """Message /sorties : une variante de variante n'empile pas « variante de « variante de … » »."""
+    names = list(BASE)
+    ev, added, _ = evolve([row(n, i + 1, 0.1 - i * 0.01) for i, n in enumerate(names)], BASE, {}, gen=1,
+                          rng=random.Random(1))
+    board2 = [row(a, i + 1, 0.3 - i * 0.01) for i, a in enumerate(added)] + \
+             [row(n, i + 10, 0.0) for i, n in enumerate(names)]
+    ev2, added2, _ = evolve(board2, BASE, ev, gen=2, rng=random.Random(2))
+    for a in added2:
+        d = ev2[a]["description"]
+        assert d.count("variante de") == 1, d
+        keys = [c.split(" ")[0] for c in ev2[a]["changes"]]
+        assert ev2[a]["base_desc"] in d
+
+
+def test_old_nested_descriptions_are_shortened():
+    from apex.trading.evolve import short_desc as readable
+    d = "variante de « variante de « récupérer la mise à x2 » (stop −40%) » (stop suiveur −60%)"
+    assert readable(d) == "variante de « récupérer la mise à x2 » (stop suiveur −60%)"
+    assert readable("récupérer la mise à x2") == "récupérer la mise à x2"

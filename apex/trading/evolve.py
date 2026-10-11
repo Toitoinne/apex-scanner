@@ -10,6 +10,8 @@ Chaque variante est simulée sur toutes les décisions alertables et jugée sur 
 """
 from __future__ import annotations
 
+import re
+
 import random
 from typing import Any
 
@@ -35,6 +37,20 @@ def readable(k: str, v: float) -> str:
 def _clip(k: str, v: float) -> float:
     lo, hi = BOUNDS[k]
     return round(min(hi, max(lo, v)), 3 if k not in ("time_stop_s", "min_hold_s") else 0)
+
+
+def root_desc(desc: str) -> str:
+    """Description de la stratégie d'origine (variantes créées avant le 11/10 : « variante de « variante de … » »)."""
+    inner = re.findall(r"« ([^«»]+) »", desc)
+    return inner[0] if inner else desc
+
+
+def short_desc(desc: str) -> str:
+    """Pour les messages : une seule « variante de », avec le dernier jeu de réglages."""
+    if desc.count("variante de") <= 1:
+        return desc
+    last = re.findall(r"\(([^()]*)\)\s*$", desc)
+    return f"variante de « {root_desc(desc)} »" + (f" ({last[0]})" if last else "")
 
 
 def mutate(cfg: dict, rng: random.Random, strength: float = 0.25) -> tuple[dict, list[str]]:
@@ -77,8 +93,13 @@ def evolve(board: list[dict], base: dict[str, dict], evolved: dict[str, dict], g
         for k in range(children):
             cfg, changes = mutate(allp[r["pol"]], rng)
             name = f"EVO{gen}_{len(added) + 1}"
-            parent_desc = allp[r["pol"]].get("description", r["pol"])
-            cfg["description"] = f"variante de « {parent_desc} » ({', '.join(changes)})"
+            par = allp[r["pol"]]
+            base = par.get("base_desc") or root_desc(par.get("description", r["pol"]))
+            merged = {}                     # un seul réglage par paramètre : la dernière valeur l'emporte
+            for c in list(par.get("changes") or []) + list(changes):
+                merged[re.sub(r"[−+-]?\d.*$", "", c).strip()] = c
+            cfg["base_desc"], cfg["changes"] = base, list(merged.values())
+            cfg["description"] = f"variante de « {base} » ({', '.join(cfg['changes'])})"
             cfg["parent"] = r["pol"]
             evolved[name] = cfg
             added.append(name)
