@@ -93,3 +93,56 @@ def test_sorties_message_with_stored_board():
          "win": "0.17662973460448338057", "h1": None, "h2": -0.1, "verdict": "perd"}
     msg = EB.render({"selection": [r], "toutes": [r], "heures": 48, "terrains": {"mig60": [r]}})
     assert "18% gagnants" in msg
+
+
+def test_exit_board_queries_without_parallel_workers():
+    """Le classement des sorties (requête lourde sur 48 h) passe par fetch_serial : en parallèle,
+    PostgreSQL saturait la mémoire partagée du conteneur et le classement échouait à chaque fois."""
+    import asyncio
+
+    from apex.db import DB
+    from apex.reporting import exit_board as EB
+
+    executed: list[str] = []
+
+    class Tx:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class Conn:
+        def transaction(self):
+            return Tx()
+
+        async def execute(self, q, *a):
+            executed.append(q)
+
+        async def fetch(self, q, *a):
+            assert executed and "max_parallel_workers_per_gather = 0" in executed[-1]
+            if "d.point = ANY" in q:
+                return [{"point": "mig60", "pol": "TP2_SL50", "n": 10, "mean": -0.1, "sd": 0.2, "med": -0.1,
+                         "win": 0.2, "h1": -0.1, "h2": -0.1}]
+            return [{"pol": "TP2_SL50", "n": 10, "mean": -0.1, "sd": 0.2, "med": -0.1, "win": 0.2, "h1": -0.1, "h2": -0.1}]
+
+    class Pool:
+        def acquire(self):
+            conn = Conn()
+
+            class Ctx:
+                async def __aenter__(self):
+                    return conn
+
+                async def __aexit__(self, *a):
+                    return False
+            return Ctx()
+
+    db = DB(Pool())
+
+    async def forbidden(*a):
+        raise AssertionError("requête parallèle interdite pour le classement")
+    db.fetch = forbidden
+    board = asyncio.run(EB.build(db, Config.load(), 48))
+    assert board["selection"][0]["pol"] == "TP2_SL50" and board["terrains"]["mig60"]
+    assert len(executed) == 3

@@ -41,6 +41,15 @@ class DB:
         async with self.pool.acquire() as conn:
             return await conn.fetch(q, *args)
 
+    async def fetch_serial(self, q: str, *args: Any) -> list[asyncpg.Record]:
+        """Requête lourde exécutée SANS travailleurs parallèles : en parallèle, PostgreSQL échange les
+        résultats intermédiaires par la mémoire partagée (/dev/shm, 64 Mo dans le conteneur) et échoue
+        alors avec « could not resize shared memory segment … No space left on device »."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL max_parallel_workers_per_gather = 0")
+                return await conn.fetch(q, *args)
+
     async def fetchrow(self, q: str, *args: Any) -> asyncpg.Record | None:
         async with self.pool.acquire() as conn:
             return await conn.fetchrow(q, *args)
