@@ -23,9 +23,9 @@ from .. import bus as B
 from ..config import Config, secrets
 from ..db import DB, ts
 from ..events import Decision, PriceTick, TokenCreated, Trade
-from ..trading.exits import DANGER_LABELS, PolicyState
+from ..trading.exits import DANGER_LABELS
 from ..trading.pricefilter import PriceGuard
-from .engine import OUT, LabelerEngine, Position
+from .engine import OUT, LabelerEngine
 
 log = logging.getLogger("labeler")
 GROUP = "labeler"
@@ -271,9 +271,7 @@ class LabelerService:
         kept = range(kept_n)
         restored = 0
         for r in await self.db.fetch("SELECT decision_id, mint, symbol, policy, state FROM paper_positions WHERE status='open'"):
-            if r["decision_id"] not in self.engine.positions and r["policy"] in self.engine.policies:
-                self.engine.positions[r["decision_id"]] = Position(
-                    r["decision_id"], r["mint"], r["policy"], PolicyState.from_dict(r["state"]), r["symbol"] or "")
+            if self.engine.reload_position(r["decision_id"], r["mint"], r["policy"], r["state"], r["symbol"] or ""):
                 restored += 1
         log.info("état reconstruit : %d événements, %d décisions longues reprises depuis la base, "
                  "%d labels en attente (%d déjà émis), %d positions rechargées",

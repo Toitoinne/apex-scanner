@@ -201,6 +201,18 @@ class LabelerEngine:
                 self.policies[n] = Policy.from_cfg(n, c)
         self.active_policies = set(allp)
 
+    def reload_position(self, did: str, mint: str, policy: str, state: dict, symbol: str = "") -> bool:
+        """Position encore ouverte en base, rechargée après un redémarrage. Si sa stratégie a été retirée
+        entre-temps par l'évolution (sa règle n'existe plus), elle est soldée au dernier prix connu au
+        prochain tour au lieu de rester ouverte pour toujours (vu le 11/10 : 2 positions EVO3_* bloquées)."""
+        if did in self.positions:
+            return False
+        if policy not in self.policies:
+            self.policies[policy] = Policy(name=policy, stop_loss=1.0, take_profits=(), danger_exit=False,
+                                           time_limit_s=0, description="stratégie retirée : soldée au dernier prix")
+        self.positions[did] = Position(did, mint, policy, PolicyState.from_dict(state), symbol)
+        return True
+
     def _exit_signal(self, tr: Track, t: float, price: float) -> float | None:
         """Sortie apprise : seulement pour les tokens où une position (simulée ou réelle) est ouverte."""
         if not tr.sims and not any(p.mint == tr.created.mint and not p.state.closed for p in self.positions.values()):

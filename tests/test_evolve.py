@@ -77,3 +77,21 @@ def test_old_nested_descriptions_are_shortened():
     d = "variante de « variante de « récupérer la mise à x2 » (stop −40%) » (stop suiveur −60%)"
     assert readable(d) == "variante de « récupérer la mise à x2 » (stop suiveur −60%)"
     assert readable("récupérer la mise à x2") == "récupérer la mise à x2"
+
+
+def test_position_of_retired_strategy_is_closed_after_restart():
+    """Redémarrage après le retrait d'une variante : sa position ouverte en base est rechargée et soldée
+    au dernier prix connu (avant : jamais rechargée, restait « ouverte » pour toujours, 11/10)."""
+    from apex.trading.exits import PolicyState
+    eng = LabelerEngine(Config.load().data)
+    st = PolicyState("EVO3_1", entry=1e-7, t0=1000.0, last_price=0.5e-7, last_t=1100.0, peak=1.2e-7)
+    assert "EVO3_1" not in eng.policies
+    assert eng.reload_position("d1", "MINTpump", "EVO3_1", st.to_dict(), "SYM")
+    assert not eng.reload_position("d1", "MINTpump", "EVO3_1", st.to_dict(), "SYM")     # pas de doublon
+    assert "EVO3_1" not in eng.active_policies                                        # jamais simulée sur du neuf
+    eng.tick(2000.0)
+    _, signals = eng.drain()
+    assert len(signals) == 1 and signals[0]["decision_id"] == "d1" and signals[0]["closed"]
+    assert abs(signals[0]["multiple"] - 0.5) < 1e-9 and eng.positions["d1"].state.closed
+    eng.tick(2100.0)
+    assert eng.drain()[1] == []                                                       # vendue une seule fois
