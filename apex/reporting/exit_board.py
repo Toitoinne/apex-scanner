@@ -34,7 +34,9 @@ SELECT pol, count(*) n, avg(least(pnl, 20)) mean, stddev_samp(least(pnl, 20)) sd
        percentile_cont(0.5) WITHIN GROUP (ORDER BY pnl) med, avg((pnl > 0)::int)::float8 win,
        avg(least(pnl, 20)) FILTER (WHERE o.ts < (SELECT m FROM mid)) h1,
        avg(least(pnl, 20)) FILTER (WHERE o.ts >= (SELECT m FROM mid)) h2
-FROM o WHERE NOT $4 OR o.decision_id IN (SELECT decision_id FROM top) GROUP BY 1
+FROM o LEFT JOIN (SELECT DISTINCT decision_id FROM top) t USING (decision_id)
+WHERE NOT $4 OR t.decision_id IS NOT NULL GROUP BY 1   -- jointure : un « IN (sous-requête) » trop gros pour la
+                                                       -- mémoire de travail était évalué ligne par ligne (> 15 min)
 """
 
 
