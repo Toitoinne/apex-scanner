@@ -18,3 +18,11 @@ def test_summary_is_plain():
     bad = {**ok, "doublons": {"ok": False, "n": 2}, "prix_ventes": {"ok": False, "n": 9, "part": 0.3}}
     probs, res = summarize(bad)
     assert len(probs) == 2 and "vendus deux fois" in res and "30%" in res
+
+
+def test_slow_feed_gap_is_explained_not_alarmed():
+    ok = {k: {"ok": True, "n": 0, "part": 0.0} for k in
+          ("calcul", "doublons", "prix_ventes", "bloquees", "impossibles", "achats_rates")}
+    ok["simulateur"] = {"ok": True, "n": 8, "part": 0.57, "retard_flux_s": 8.7, "non_comparable": True}
+    probs, res = summarize(ok)
+    assert not probs and "retard du flux" in res

@@ -24,7 +24,7 @@ def test_bulletin_is_plain_and_complete():
     assert txt.startswith("💚 <b>APEX tourne normalement</b>")
     for s in ("21\u202f300 nouveaux tokens", "4 alertes", "$PEPE : jusqu'à x3,4", "2 gagnants", "33% moins",
               "↗ en progrès", "n'a pas signalé un token", "4 nouveaux modèles", "annulé (n'aidait pas)",
-              "4/8 critères", "16/100 trades simulés", "Rien à faire"):
+              "4/8 critères", "16/100 trades terminés dans le simulateur", "Rien à faire"):
         assert s in txt, s
     for jargon in ("logloss", "bandit", "label", "champion", "PLATEAU", "lgbm"):
         assert jargon not in txt.lower(), jargon

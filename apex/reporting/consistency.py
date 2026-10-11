@@ -56,10 +56,13 @@ def summarize(checks: dict[str, dict]) -> tuple[list[str], str]:
         problems.append(f"{c['achats_rates']['n']} achat(s) raté(s) comptés comme une grosse perte")
     resume = ("✅ Résultats cohérents : chaque trade recalculé, ventes au vrai prix du marché, simulateur aligné"
               if not problems else "⚠️ Incohérences : " + " ; ".join(problems))
+    if not problems and c["simulateur"].get("non_comparable"):
+        resume = ("✅ Résultats cohérents (trades recalculés, ventes au vrai prix) ; simulateur et entraînement "
+                  f"divergent à cause des {c['simulateur']['retard_flux_s']:g} s de retard du flux — attendu")
     return problems, resume
 
 
-async def run(db: Any, hours: int = 24) -> dict:
+async def run(db: Any, hours: int = 24, feed_lag_s: float = 0.0) -> dict:
     checks: dict[str, dict] = {}
     rows = await db.fetch(
         """SELECT decision_id, mint, entry_price, pnl, fills, state FROM paper_positions
@@ -92,7 +95,11 @@ async def run(db: Any, hours: int = 24) -> dict:
            WHERE e.status = 'closed' AND p.status = 'closed' AND e.closed_at > now() - make_interval(hours => $1)""", hours)
     far = sum(1 for x in pairs if x["ep"] is not None and x["pp"] is not None and abs(x["ep"] - x["pp"]) > 0.25)
     sp = far / len(pairs) if pairs else 0.0
-    checks["simulateur"] = {"ok": len(pairs) < 5 or sp <= 0.3, "n": far, "paires": len(pairs), "part": sp}
+    # flux en retard (> 3 s) : l'entraînement achète au prix VU (déjà vieux), le simulateur au prix réel du moment ;
+    # un écart est alors attendu (ex. 11/10 : −44 % contre −6 % sur un token qui chutait) — pas une incohérence
+    slow = feed_lag_s > 3
+    checks["simulateur"] = {"ok": slow or len(pairs) < 5 or sp <= 0.3, "n": far, "paires": len(pairs), "part": sp,
+                            "retard_flux_s": round(feed_lag_s, 1), "non_comparable": slow and sp > 0.3}
     stuck = await db.fetchval(
         """SELECT (SELECT count(*) FROM exec_positions WHERE status IN ('open','pending') AND opened_at < now() - interval '26 hours')
                 + (SELECT count(*) FROM paper_positions WHERE status = 'open' AND opened_at < now() - interval '26 hours')""")

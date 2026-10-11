@@ -131,7 +131,8 @@ def check_lines(trading: dict, cfg_criteria: dict) -> tuple[int, int, list[str]]
     s = trading.get("stats") or {}
     c = cfg_criteria
     plain = {
-        "positions": f"{s.get('n', 0)}/{c.get('min_positions', 100)} trades simulés terminés",
+        "positions": (f"{s.get('n', 0)}/{c.get('min_positions', 100)} trades terminés dans le simulateur d'ordres "
+                      "(achat au prix réel du moment, retard compris)"),
         "duree": f"{s.get('days', 0):.1f}/{c.get('min_days', 7)} jours de recul".replace(".", ","),
         "rendement": f"gain moyen {pct(s.get('total_return', 0), 1)} par trade (objectif {pct(c.get('min_return', 0.1))})",
         "profit_factor": (f"gains {s.get('profit_factor', 0):.2f}× plus gros que les pertes "
@@ -219,8 +220,12 @@ def render(d: dict, title: str) -> str:
         lines.append("• Ce qu'il a changé tout seul :")
         if nm:
             lines.append(f"   ↳ {nm} nouveau{'x' if nm > 1 else ''} modèle{'s' if nm > 1 else ''} entraîné{'s' if nm > 1 else ''} et mis en concurrence")
-        for a in acts[:4]:
-            lines.append(f"   ↳ il {ACTION_TXT.get(a['action'], a['action'])} → {STATUS_TXT.get(a['status'], a['status'])}")
+        seen: dict[str, int] = {}             # actions identiques regroupées : « … (×2) » au lieu de 2 lignes
+        for a in acts:
+            t = f"il {ACTION_TXT.get(a['action'], a['action'])} → {STATUS_TXT.get(a['status'], a['status'])}"
+            seen[t] = seen.get(t, 0) + 1
+        for t, k in list(seen.items())[:4]:
+            lines.append(f"   ↳ {t}" + (f" (×{k})" if k > 1 else ""))
     tr = d.get("trading") or {}
     if tr:
         ok, total, missing = check_lines(tr, d.get("criteria") or {})

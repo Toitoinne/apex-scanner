@@ -640,6 +640,13 @@ class Supervisor:
                     await self.bus.r.set("apex:report:tech", tech)
             await bounded("bulletin", self.bulletin_if_due())
             # cohérence des résultats (trades recalculés, ventes au vrai prix, simulateur aligné) : toutes les 3 h
+            try:                              # retard du flux relevé à chaque cycle (~15 min) : moyenne sur 24 h
+                lag = await self.bus.get_json("apex:feed:lag", {}) or {}
+                if now - lag.get("ts", 0) < 600:
+                    await self.bus.r.lpush("apex:feed:lag:hist", str(float(lag.get("moyen_5min", 0.0))))
+                    await self.bus.r.ltrim("apex:feed:lag:hist", 0, 95)
+            except Exception:  # noqa: BLE001
+                log.exception("relevé du retard du flux")
             if now - last_consistency >= 3 * 3600:
                 last_consistency = now
                 await bounded("vérification de cohérence", self.consistency_check())
@@ -656,7 +663,8 @@ class Supervisor:
             await asyncio.sleep(self.s["cycle_s"])
 
     async def consistency_check(self) -> None:
-        res = await CO.run(self.db, 24)
+        hist = [float(x) for x in await self.bus.r.lrange("apex:feed:lag:hist", 0, 95)]
+        res = await CO.run(self.db, 24, sum(hist) / len(hist) if hist else 0.0)     # retard moyen sur ~24 h
         await self.bus.set_json("apex:consistency", {**res, "ts": time.time()})
         await self.db.log_event("info" if res["ok"] else "warning", "coherence", res["resume"])
         last_alert = float(await self.bus.r.get("apex:consistency:alerted") or 0)
