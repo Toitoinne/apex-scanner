@@ -269,7 +269,8 @@ async def gather(db: Any, bus: Any, cfg: Any, hours: int, record: bool = True) -
     d["criteria"] = cfg.get("trading.criteria") or {}
     board = await bus.get_json("apex:exits:board", {}) or {}
     sel = board.get("selection") or []
-    d["best_exit"] = {**sel[0], "n_testees": len(board.get("toutes") or sel)} if sel else None
+    tested = [r for r in sel if int(r.get("n", 0)) >= 300] or sel    # pas de « meilleure » sur 10 cas
+    d["best_exit"] = {**tested[0], "n_testees": len(board.get("toutes") or sel)} if sel else None
     d["ev"] = await bus.get_json("apex:ev:stats", {}) or {}
     d["terrains"] = {pt: rk[0] for pt, rk in (board.get("terrains") or {}).items() if rk}
     d["exit_model"] = ((await bus.get_json("apex:labeler:stats", {}) or {}).get("sortie_apprise") or {})
