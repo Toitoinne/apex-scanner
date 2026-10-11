@@ -92,7 +92,7 @@ async def build(db: Any, cfg: Any, hours: int = 48, evolved: dict | None = None)
     for key, only_top in (("toutes", False), ("selection", True)):
         rows = [dict(r) for r in await db.fetch_serial(SQL, hours, cfg.get("bandit.min_buyers_to_alert", 10),
                                                  cfg["labels"]["primary"], only_top)]
-        ranked = rank([r for r in rows if r["n"]])
+        ranked = rank([r for r in rows if r["n"] and r["pol"] in desc])   # variantes retirées : plus affichées
         for r in ranked:
             r["description"] = desc.get(r["pol"], r["pol"])
         res[key] = ranked
@@ -101,7 +101,7 @@ async def build(db: Any, cfg: Any, hours: int = 48, evolved: dict | None = None)
     obs_points = [f"mig{s}" for s in cfg.get("observe.after_migration_s") or [60, 300, 900]] + ["vague2"]
     rows = [dict(r) for r in await db.fetch_serial(SQL_POINT, hours, cfg.get("bandit.min_buyers_to_alert", 10), obs_points)]
     for pt in obs_points:
-        rk = rank([r for r in rows if r["point"] == pt and r["n"]])
+        rk = rank([r for r in rows if r["point"] == pt and r["n"] and r["pol"] in desc])
         for r in rk:
             r["description"] = desc.get(r["pol"], r["pol"])
         if rk:
