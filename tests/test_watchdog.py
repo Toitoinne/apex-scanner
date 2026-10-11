@@ -116,4 +116,7 @@ def test_connexions_doublees_par_url():
     # ws0 reste la 1re connexion de la 1re URL ; les renforts (ws2, ws3) viennent après
     assert expand_ws_urls(urls, 2) == ["wss://a", "wss://b", "wss://a", "wss://b"]
     from apex.config import Config
-    assert Config.load()["ingestion"]["connections_per_url"] >= 2
+    ing = Config.load()["ingestion"]
+    # depuis le 11/10 : flux payant (stable) + RPC public en secours → 1 connexion chacun suffit ;
+    # PumpSwap reste sur le RPC public, jamais sur la 1re URL (payante)
+    assert ing["connections_per_url"] >= 1 and "mainnet-beta" in ing["pumpswap_ws_url"]

@@ -302,7 +302,9 @@ class Ingestor:
         """Trades PumpSwap en direct pour les tokens migrés suivis (positions, labels longs,
         stratégies). Le labeler publie la liste des pools dans apex:pools:active ; on s'abonne /
         se désabonne dynamiquement (quelques dizaines de pools au lieu des ~400 tx/s du programme)."""
-        url = self.free_urls[0] if self.free_urls else "wss://api.mainnet-beta.solana.com"
+        # serveur dédié (config) : le RPC public gratuit par défaut — abonnements par pool éprouvés, et ~45 Go/jour
+        # qu'on ne fait pas passer par un fournisseur payant (11/10 : aucun abonnement accepté sur RPC Fast)
+        url = self.cfg.get("ingestion.pumpswap_ws_url") or "wss://api.mainnet-beta.solana.com"
         nbytes = self.stats["bytes"]
         async with websockets.connect(url, ping_interval=20, max_size=2**23, open_timeout=15) as ws:
             pending: dict[int, str] = {}           # id de requête -> pool
