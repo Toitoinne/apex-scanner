@@ -13,6 +13,7 @@ Validation honnête à chaque entraînement : modèles appris sur les 80 % plus 
 """
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass, field
 from typing import Any
@@ -108,6 +109,24 @@ def train(rows: list[tuple[dict, dict, float]], policies: list[str], clip: tuple
         })
     models = EVModels(feats=feats, boosters=_fit(rows, policies, feats, clip, min_rows, rounds), stats=stats)
     return models
+
+
+ROWS_SQL = """SELECT extract(epoch from o.ts)::float8 ts, d.features, o.pnl FROM outcomes o JOIN decisions d USING (decision_id)
+   WHERE o.ts > now() - make_interval(hours => $1) AND d.ts > now() - make_interval(hours => $1 + 24)
+     AND NOT d.blocked AND (d.features->>'unique_buyers')::float >= $2
+     AND (d.point ~ '^[0-9]+$' OR d.point = 'migration')"""
+
+
+async def load_rows(db, hours: float, min_buyers: float) -> list[tuple[dict, dict, float]]:
+    """Décisions alertables et gains réels de chaque stratégie sur `hours` heures. Requête lourde exécutée
+    SANS travailleurs parallèles (fetch_serial) : en parallèle, elle saturait la mémoire partagée du
+    conteneur PostgreSQL (« No space left on device ») et la validation échouait à chaque fois."""
+    rows = []
+    for r in await db.fetch_serial(ROWS_SQL, hours, min_buyers):
+        f = r["features"] if isinstance(r["features"], dict) else json.loads(r["features"])
+        p = r["pnl"] if isinstance(r["pnl"], dict) else json.loads(r["pnl"])
+        rows.append((f, {k: float(v) for k, v in p.items()}, r["ts"]))
+    return rows
 
 
 def summary(stats: dict) -> str:

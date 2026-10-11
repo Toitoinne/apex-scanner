@@ -54,3 +54,25 @@ def test_auto_arm_reward_and_alert_policy():
     assert arm.n > 0 and arm.mean() > 0                                  # récompensé avec le gain de la stratégie choisie
     lr.set_ev(None)
     assert not any(a.policy == "AUTO" for a in lr.bandit.arms.values())
+
+
+def test_rows_loaded_without_parallel_workers():
+    """La validation lit 48 h de résultats via fetch_serial : en parallèle, PostgreSQL saturait la mémoire
+    partagée du conteneur (« No space left on device ») et la validation échouait toutes les 6 h."""
+    import asyncio
+
+    from apex.learning.ev import load_rows
+
+    class FakeDB:
+        def __init__(self):
+            self.calls = []
+
+        async def fetch_serial(self, q, *a):
+            self.calls.append((q, a))
+            return [{"ts": 5.0, "features": '{"speed": 0.5}', "pnl": '{"VITE": "0.25"}'},
+                    {"ts": 6.0, "features": {"speed": 0.1}, "pnl": {"LENT": -0.1}}]
+
+    db = FakeDB()
+    rows = asyncio.run(load_rows(db, 48, 10))
+    assert db.calls and db.calls[0][1] == (48, 10)
+    assert rows == [({"speed": 0.5}, {"VITE": 0.25}, 5.0), ({"speed": 0.1}, {"LENT": -0.1}, 6.0)]

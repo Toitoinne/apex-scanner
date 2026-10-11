@@ -8,7 +8,6 @@ dédupliquées par decision_id (contrainte UNIQUE en base).
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from pathlib import Path
@@ -205,17 +204,7 @@ class LearnerService:
         history: list[dict] = (await self.bus.get_json("apex:ev:history", []) or [])[-6:]
         while True:
             try:
-                rs = await self.db.fetch(
-                    """SELECT extract(epoch from o.ts)::float8 ts, d.features, o.pnl FROM outcomes o JOIN decisions d USING (decision_id)
-                       WHERE o.ts > now() - make_interval(hours => $1) AND d.ts > now() - make_interval(hours => $1 + 24)
-                         AND NOT d.blocked AND (d.features->>'unique_buyers')::float >= $2
-                         AND (d.point ~ '^[0-9]+$' OR d.point = 'migration')""",
-                    c.get("ev.hours", 48), c.get("bandit.min_buyers_to_alert", 10))
-                rows = []
-                for r in rs:
-                    f = r["features"] if isinstance(r["features"], dict) else json.loads(r["features"])
-                    p = r["pnl"] if isinstance(r["pnl"], dict) else json.loads(r["pnl"])
-                    rows.append((f, {k: float(v) for k, v in p.items()}, r["ts"]))
+                rows = await EV.load_rows(self.db, c.get("ev.hours", 48), c.get("bandit.min_buyers_to_alert", 10))
                 pols = sorted({k for _, p, _ in rows for k in p})
                 if len(rows) >= c.get("ev.min_rows", 3000):
                     models = await asyncio.to_thread(EV.train, rows, pols, tuple(c.get("ev.clip", [-1.0, 3.0])),
