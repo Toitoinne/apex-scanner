@@ -48,12 +48,22 @@ def verdict(r: dict) -> str:
 
 
 async def rpc(c: httpx.AsyncClient, method: str, params: list) -> dict | list | None:
+    """Appel au RPC public. Une coupure réseau passagère (délai de connexion, connexion fermée) ou un refus
+    pour excès de requêtes est retenté ; si l'appel échoue toujours, None (la mesure concernée est sautée)
+    au lieu de faire planter tout l'audit."""
     for attempt in range(4):
-        r = await c.post(RPC, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        try:
+            r = await c.post(RPC, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        except httpx.TransportError:
+            await asyncio.sleep(2 * (attempt + 1))
+            continue
         if r.status_code == 429:
             await asyncio.sleep(2 * (attempt + 1))
             continue
-        return r.json().get("result")
+        try:
+            return r.json().get("result")
+        except ValueError:
+            return None
     return None
 
 
