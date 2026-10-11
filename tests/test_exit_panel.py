@@ -146,3 +146,12 @@ def test_exit_board_queries_without_parallel_workers():
     board = asyncio.run(EB.build(db, Config.load(), 48))
     assert board["selection"][0]["pol"] == "TP2_SL50" and board["terrains"]["mig60"]
     assert len(executed) == 3
+
+
+def test_sorties_ranks_tested_strategies_first():
+    from apex.reporting import exit_board as EB
+    mk = lambda pol, rang, n, mean: {"pol": pol, "description": pol, "rang": rang, "n": n, "mean": mean,  # noqa: E731
+                                     "lo": mean - 0.1, "hi": mean + 0.1, "win": 0.2, "verdict": "pas prouvée"}
+    sel = [mk("NEUVE", 1, 10, 0.05), mk("ANCIENNE", 2, 4000, -0.08)]
+    msg = EB.render({"selection": sel, "toutes": sel, "heures": 48})
+    assert "1. ANCIENNE" in msg and "NEUVE" not in msg.split("(+")[0] and "1 nouvelle(s) variante(s)" in msg

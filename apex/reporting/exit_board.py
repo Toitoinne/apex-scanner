@@ -54,6 +54,8 @@ SELECT o.point, pol, count(*) n, avg(least(pnl, 20)) mean, stddev_samp(least(pnl
 FROM o JOIN mid USING (point) GROUP BY 1, 2
 """
 
+MIN_CASES = 300         # en dessous, le résultat moyen est surtout du hasard (même seuil que l'évolution)
+
 TERRAIN = {"mig60": "1 min après la migration", "mig300": "5 min après la migration", "mig900": "15 min après la migration",
            "vague2": "deuxième vague (token de plus d'1 h qui repart)"}
 
@@ -116,16 +118,21 @@ def render(board: dict, top: int = 8) -> str:
     """Message Telegram simple (commande /sorties)."""
     badges = {"solide": "✅", "pas prouvée": "⚪", "perd": "🔻"}
 
-    def line(r: dict) -> str:
-        return (f"{badges[r['verdict']]} {r['rang']}. {r.get('description', r['pol'])}\n"
+    def line(r: dict, rang: int | None = None) -> str:
+        return (f"{badges[r['verdict']]} {rang or r['rang']}. {r.get('description', r['pol'])}\n"
                 f"     {fr(r['mean'])} par trade en moyenne (entre {fr(r['lo'])} et {fr(r['hi'])}), "
                 f"{float(r['win']):.0%} gagnants, {r['n']} cas")
     sel = board.get("selection") or []
     allr = board.get("toutes") or []
     lines = [f"<b>Stratégies de sortie</b> — {len(allr)} testées sur {board.get('heures', 48)} h (simulation, frais compris)", ""]
     if sel:
+        # une stratégie testée sur 10 cas n'est pas classée devant d'autres testées sur des milliers
+        tested = [r for r in sel if int(r["n"]) >= MIN_CASES]
+        fresh = len(sel) - len(tested)
         lines += ["<b>Sur les tokens que le bot juge les meilleurs</b> (ceux qui ressemblent à ses alertes) :"]
-        lines += [line(r) for r in sel[:top]]
+        lines += [line(r, i + 1) for i, r in enumerate((tested or sel)[:top])]
+        if tested and fresh:
+            lines.append(f"(+ {fresh} nouvelle(s) variante(s) encore en test : moins de {MIN_CASES} cas, pas encore classées)")
         n_ok = sum(r["verdict"] == "solide" for r in sel)
         lines += ["", f"{n_ok} stratégie(s) gagnent de façon prouvée pour l'instant." if n_ok else
                   "Aucune ne gagne encore de façon prouvée : le bot doit d'abord mieux choisir ses tokens, "
