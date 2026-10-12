@@ -28,11 +28,12 @@ def test_bureau_api_with_partial_data():
     A.state.update(cfg=Config.load(), db=_DB(), bus=_Bus({
         "apex:ingestor:stats": {"events": 100, "late": 0},
         "apex:learner:state": {"ensembles": {"L60": {"champion": "mcbase", "competitors": [
-            {"id": "mcbase", "logloss": 0.19}, {"id": "prior", "logloss": 0.22}]}}, "lgbm_version": 300},
+            {"id": "mcbase", "logloss": 0.19}, {"id": "prior", "logloss": 0.22}, {"id": "lgbm_v300"}]}}},
         "apex:trading:status": {"state": "APPRENTISSAGE", "checks": {"a": [True, ""], "b": [False, ""]}}}))
     A.state.pop("bureau_prev", None)
     d = asyncio.run(A.bureau(None))
     assert d["chercheur"]["champion"] == "mcbase" and 0.1 < d["chercheur"]["gain_vs_hasard"] < 0.2
+    assert d["chercheur"]["lgbm_version"] == 300
     assert d["trader"]["criteres_ok"] == 1 and d["trader"]["criteres"] == 2
     assert d["facteur"]["dernieres"] == [] and d["fil"] == [] and d["guetteur"]["par_min"] is None
     A.state["bus"] = _Bus({})                                   # tout vide : pas de plantage

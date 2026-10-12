@@ -220,7 +220,10 @@ async def bureau(_: None = Depends(auth)) -> dict:
         "chercheur": {"appris": ln.get("n_labels"), "par_heure": health.get("labels_last_hour"),
                       "champion": champ, "gain_vs_hasard": (round(1 - champ_ll / prior_ll, 3)
                                                              if champ_ll and prior_ll else None),
-                      "concurrents": len(ens.get("competitors", [])), "lgbm_version": ln.get("lgbm_version")},
+                      "concurrents": len(ens.get("competitors", [])),
+                      "lgbm_version": max((int(c["id"][6:]) for e in (ln.get("ensembles") or {}).values()
+                                           for c in e.get("competitors", []) if c["id"][6:].isdigit()
+                                           and c["id"].startswith("lgbm_v")), default=None)},
         "trader": {"etat": ts_.get("state"), "criteres_ok": sum(1 for v in checks.values() if v and v[0]),
                    "criteres": len(checks), "n": (ts_.get("stats") or {}).get("n"),
                    "rendement": (ts_.get("stats") or {}).get("total_return"), "ouverts": trd.get("open_positions"),
