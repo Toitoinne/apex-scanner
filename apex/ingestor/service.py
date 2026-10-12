@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import zlib
 from typing import Any
 
 import orjson
@@ -58,6 +59,11 @@ def plan_pool_subs(wanted: set[str], subscribed: set[str], pending: set[str],
     unsub = sorted(subscribed - wanted)[:budget]
     sub = sorted(wanted - subscribed - pending)[:max(0, budget - len(unsub))]
     return unsub, sub
+
+
+def pool_shard(pool: str, n: int) -> int:
+    """Connexion PumpSwap (0..n-1) chargée d'un pool : stable d'un redémarrage à l'autre."""
+    return zlib.crc32(pool.encode()) % max(1, n)
 
 
 def is_late(last_slot: dict[str, int], ev: Any, tolerance: int) -> bool:
@@ -127,6 +133,9 @@ class Ingestor:
         # abonnements PumpSwap étalés (le RPC public refuse les rafales : ~40 requêtes / 10 s)
         self.pumpswap_burst = ing.get("pumpswap_subs_per_round", 5)
         self.pumpswap_gap_s = ing.get("pumpswap_sub_gap_s", 0.3)
+        self.pumpswap_conns = max(1, ing.get("pumpswap_connections", 1))
+        self.pumpswap_max_attempts = ing.get("pumpswap_subs_per_connection", 90)
+        self._pool_counts: dict[int, int] = {}
         wd = ing.get("watchdog", {})
         self.wd = FlowWatchdog(log_sources=[f"ws{i}" for i in range(len(self.free_urls))],
                                stall_s=wd.get("stall_s", 30), backup_after_s=wd.get("backup_after_s", 15),
@@ -298,10 +307,13 @@ class Ingestor:
                     await self.emit(ev)
 
     # ---------------- PumpSwap : abonnement aux SEULS pools suivis ----------------
-    async def pumpswap(self) -> None:
+    async def pumpswap(self, shard: int = 0) -> None:
         """Trades PumpSwap en direct pour les tokens migrés suivis (positions, labels longs,
         stratégies). Le labeler publie la liste des pools dans apex:pools:active ; on s'abonne /
-        se désabonne dynamiquement (quelques dizaines de pools au lieu des ~400 tx/s du programme)."""
+        se désabonne dynamiquement (quelques dizaines de pools au lieu des ~400 tx/s du programme).
+        Le RPC public coupe une connexion au-delà d'~100 abonnements tentés (« Too many subscriptions
+        attempted. Please open a new connection », mesuré le 12/10) : les pools sont répartis sur
+        `pumpswap_connections` connexions, et chacune est rouverte AVANT d'atteindre la limite."""
         # serveur dédié (config) : le RPC public gratuit par défaut — abonnements par pool éprouvés, et ~45 Go/jour
         # qu'on ne fait pas passer par un fournisseur payant (11/10 : aucun abonnement accepté sur RPC Fast)
         url = self.cfg.get("ingestion.pumpswap_ws_url") or "wss://api.mainnet-beta.solana.com"
@@ -312,13 +324,17 @@ class Ingestor:
             by_pool: dict[str, int] = {}
             pool_mint: dict[str, str] = {}
             req = 100
+            attempts = 0                           # requêtes d'abonnement envoyées sur CETTE connexion
 
             async def sync() -> bool:
                 """Un tour d'abonnements, à débit limité ; vrai s'il en reste à faire."""
-                nonlocal req
-                wanted = {d["pool"]: d["mint"] for d in (await self.bus.get_json("apex:pools:active", []) or [])}
+                nonlocal req, attempts
+                wanted = {d["pool"]: d["mint"] for d in (await self.bus.get_json("apex:pools:active", []) or [])
+                          if pool_shard(d["pool"], self.pumpswap_conns) == shard}
                 pool_mint.update(wanted)
-                unsub, sub = plan_pool_subs(set(wanted), set(by_pool), set(pending.values()), self.pumpswap_burst)
+                budget = min(self.pumpswap_burst, self.pumpswap_max_attempts - attempts)
+                unsub, sub = plan_pool_subs(set(wanted), set(by_pool), set(pending.values()), max(0, budget))
+                attempts += len(unsub) + len(sub)
                 for pool in unsub:
                     sid = by_pool.pop(pool)
                     subs.pop(sid, None)
@@ -332,13 +348,17 @@ class Ingestor:
                     await ws.send(orjson.dumps({"jsonrpc": "2.0", "id": req, "method": "logsSubscribe",
                                                 "params": [{"mentions": [pool]}, {"commitment": "processed"}]}).decode())
                     await asyncio.sleep(self.pumpswap_gap_s)
-                self.stats["pumpswap_pools"] = len(by_pool)
+                self._pool_counts[shard] = len(by_pool)
+                self.stats["pumpswap_pools"] = sum(self._pool_counts.values())
                 return len(wanted.keys() - by_pool.keys() - set(pending.values())) > 0 or bool(by_pool.keys() - wanted.keys())
 
             backlog = await sync()
             last_sync = time.time()
-            log.info("pumpswap actif")
+            log.info("pumpswap%s actif", shard)
             while True:
+                if backlog and attempts >= self.pumpswap_max_attempts:
+                    log.info("pumpswap%s : %s abonnements tentés, nouvelle connexion", shard, attempts)
+                    return                         # _forever rouvre tout de suite (avant la coupure du RPC)
                 every = 3.0 if backlog else 15.0
                 try:
                     msg = await asyncio.wait_for(ws.recv(), timeout=max(0.5, last_sync + every - time.time()))
@@ -524,7 +544,8 @@ class Ingestor:
         if "pumpportal" in srcs:
             tasks.append(asyncio.create_task(self._forever("pumpportal", self.pumpportal)))
         if "pumpswap" in srcs:
-            tasks.append(asyncio.create_task(self._forever("pumpswap", self.pumpswap)))
+            for k in range(self.pumpswap_conns):
+                tasks.append(asyncio.create_task(self._forever(f"pumpswap{k}", lambda k=k: self.pumpswap(k))))
         tasks.append(asyncio.create_task(self._forever("fastlane", self.fastlane)))
         await asyncio.gather(*tasks)
 

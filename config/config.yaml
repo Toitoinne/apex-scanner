@@ -26,6 +26,11 @@ ingestion:
   # 2 connexions décalées par URL → 100 % vus (mesuré contre getBlock le 09/10). Gratuit.
   connections_per_url: 1             # 11/10 : flux payant RPC Fast (0 coupure en test) + RPC public en secours : 1 connexion chacun
   pumpswap_ws_url: "wss://api.mainnet-beta.solana.com"   # trades PumpSwap des pools suivis (gratuit)
+  # le RPC public coupe une connexion après 100 abonnements tentés (mesuré le 12/10, quel que soit le rythme) :
+  # jusqu'à 200 pools répartis sur 4 connexions, chacune rouverte avant 90 tentatives
+  pumpswap_connections: 4
+  pumpswap_subs_per_connection: 90
+  pumpswap_subs_per_round: 2        # par connexion et par tour de 3 s : ×4 ≈ 27 requêtes / 10 s (limite du RPC public ~40)
   connection_stagger_s: 20
   curve_tolerance: 0.02             # seuls les trades de la courbe SOL standard (k = 30 × 1,073 Md) sont acceptés
   watchdog:
