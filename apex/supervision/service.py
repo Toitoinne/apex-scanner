@@ -383,6 +383,32 @@ class Supervisor:
         return bool(res.get("ok"))
 
     # ------------------------------------------------------------------
+    async def gc_shadows(self) -> list[str]:
+        """Ménage : un jumeau de test dont la correction est terminée (échec, dégradation…) doit disparaître.
+        L'ordre de retrait se perdait quand le learner redémarrait sur une sauvegarde antérieure : le 12/10,
+        11 jumeaux orphelins (jusqu'au 08/10) occupaient les places et faisaient éjecter les nouveaux LightGBM."""
+        st = await self.learner_state()
+        zombies: list[tuple[str, str, int]] = []
+        for h, ens in (st.get("ensembles") or {}).items():
+            for c in ens.get("competitors", []):
+                cid = (c.get("spec") or {}).get("shadow_of_correction")
+                if cid is not None:
+                    zombies.append((h, c["id"], int(cid)))
+        if not zombies:
+            return []
+        rows = await self.db.fetch("SELECT id, status FROM corrections WHERE id = ANY($1::bigint[])",
+                                   sorted({z[2] for z in zombies}))
+        live = {r["id"] for r in rows if r["status"] in ("applying", "evaluating")}
+        removed = []
+        for h, comp, cid in zombies:
+            if cid not in live:
+                res = await self.send({"op": "remove_competitor", "id": comp, "horizon": h})
+                if res.get("ok"):
+                    removed.append(comp)
+        if removed:
+            await self.db.log_event("info", "menage", f"{len(removed)} modèle(s) de test orphelin(s) retiré(s) : {', '.join(removed)}")
+        return [f"ménage : {len(removed)} modèle(s) de test orphelin(s) retiré(s)"] if removed else []
+
     async def evaluate_corrections(self) -> list[str]:
         events = []
         rows = await self.db.fetch(
@@ -590,6 +616,7 @@ class Supervisor:
         events += await self.learning_health()
         events += await self.trading_gate()
         events += await self.evaluate_corrections()
+        events += await self.gc_shadows()
         events += await self.correct(states, snap)
         stable = not any(d.state in (REGRESSION, "REGRESSION_TYPE") for d in states)
         res = await self.send({"op": "snapshot", "stable": stable, "label": "cycle"})

@@ -26,7 +26,7 @@ def logloss(p: float, y: int) -> float:
 @dataclass
 class CompetitorSpec:
     id: str
-    kind: str                                  # logreg | arf | hat | lgbm
+    kind: str                                  # logreg | arf | hat | lgbm | mcbase | rules | prior
     params: dict = field(default_factory=dict)
     disabled_features: list[str] = field(default_factory=list)
     extra_features: list[str] = field(default_factory=list)    # features Claude autorisées (cx_*)
@@ -62,11 +62,20 @@ def rules_score(x: dict[str, float]) -> float:
     return sigmoid(z)
 
 
+def mc_features(x: dict[str, float]) -> dict[str, float]:
+    """Modèle de base « capitalisation » : la capitalisation (et le moment de la décision) triait mieux les tokens
+    que tous les modèles le 12/10 (AUC 0,84 contre 0,73 pour le champion « rules »). Ce concurrent garantit que
+    le bot ne fait jamais moins bien que cet indicateur seul."""
+    lm = math.log(max(float(x.get("mc_sol") or 0.0), 1e-3))
+    la = math.log(max(float(x.get("age_s") or 0.0), 1.0))
+    return {"lmc": lm, "lage": la, "lmc_lage": lm * la}
+
+
 def build_river_model(spec: CompetitorSpec, seed: int = 42) -> Any:
     if spec.kind == "rules":
         return None
     p = spec.params
-    if spec.kind == "logreg":
+    if spec.kind in ("logreg", "mcbase"):
         return compose.Pipeline(
             preprocessing.StandardScaler(),
             linear_model.LogisticRegression(optimizer=optim.SGD(p.get("lr", 0.01)), l2=p.get("l2", 1e-4)),
@@ -110,6 +119,8 @@ class Competitor:
         return self.spec.id
 
     def filter_x(self, x: dict[str, float]) -> dict[str, float]:
+        if self.spec.kind == "mcbase":
+            return mc_features(x)
         dis = set(self.spec.disabled_features)
         extra = set(self.spec.extra_features)
         return {k: v for k, v in x.items()

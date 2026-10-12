@@ -18,11 +18,12 @@ DEFAULT_SPECS = [
     CompetitorSpec(id="logreg", kind="logreg", params={"lr": 0.01}),
     CompetitorSpec(id="arf", kind="arf", params={"n_models": 10}),
     CompetitorSpec(id="hat", kind="hat", params={"grace_period": 200}),
+    CompetitorSpec(id="mcbase", kind="mcbase", params={"lr": 0.01}),
 ]
 
 
 # modèles de base jamais éjectés : ce sont les références des comparaisons (ombres, features)
-PROTECTED = {"rules", "prior", "logreg", "arf", "hat"}
+PROTECTED = {"rules", "prior", "logreg", "arf", "hat", "mcbase"}
 
 
 class HorizonEnsemble:
@@ -67,10 +68,15 @@ class HorizonEnsemble:
         self.challenger_streak.pop(cid, None)
 
     def _enforce_max(self) -> None:
+        """Au-delà du plafond, le moins bon concurrent ÉVALUÉ est retiré. Un concurrent qui n'a pas encore assez
+        d'évaluations n'est jamais éjecté : sa perte moyenne vaut « l'infini » faute de données, et chaque nouveau
+        LightGBM de L60 était supprimé à la seconde de son arrivée (12/10 : aucun évalué depuis la v210)."""
         mx = self.mcfg["max_competitors"]
+        n_min = self.mcfg.get("min_samples_for_champion", 500)
         while len(self.competitors) > mx:
             cands = [c for c in self.competitors.values()
-                     if c.id != self.champion_id and c.spec.shadow_of_correction is None and c.id not in PROTECTED]
+                     if c.id != self.champion_id and c.spec.shadow_of_correction is None and c.id not in PROTECTED
+                     and len(c.losses) >= n_min]
             if not cands:
                 break
             worst = max(cands, key=lambda c: c.mean_loss())
@@ -107,7 +113,9 @@ class HorizonEnsemble:
                 if raw != 0.5 or cid == self.champion_id:
                     losses[cid] = c.evaluate(raw, y, cal, focus)
             c.learn(x, y, w_by_comp.get(cid, 1.0))
-        self.replay.append((x, y, w_by_comp.get(self.champion_id or "", 1.0), ts))
+        # poids simple (gagnants surpondérés) : le poids « erreur du champion » (jusqu'à ×10) dégradait le tri de
+        # LightGBM (12/10 : AUC 0,69 en direct contre 0,83 entraîné à part sur les mêmes données)
+        self.replay.append((x, y, float(self.mcfg.get("positive_class_weight", 1.0)) if y else 1.0, ts))
         return losses
 
     # ---------- champion ----------
