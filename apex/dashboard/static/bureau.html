@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Le bureau APEX</title>
+<style>
+  :root {
+    --wall:#f3ead8; --wall2:#e9dcc2; --floor:#c9a77c; --floor2:#b8956a; --desk:#8a5a35; --desk-top:#a46c41;
+    --ink:#2b2622; --muted:#7a6e62; --card:#fffaf0; --line:#dccbb0; --good:#2e9e62; --bad:#d4483b; --warn:#d9921a;
+    --screen:#1d2733; --screen-text:#7dffb0; --bubble:#ffffff; --sky:#bfe3ff; --sky2:#e8f6ff;
+  }
+  body.nuit { --wall:#2c2f3d; --wall2:#252836; --floor:#4a3d33; --floor2:#3f342b; --ink:#ecebf3; --muted:#a8a3b5;
+              --card:#34374a; --line:#454a60; --bubble:#f6f3ff; --sky:#0d1633; --sky2:#1c2952; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.4 "Segoe UI", system-ui, sans-serif; color:var(--ink); background:var(--wall);
+         background-image:repeating-linear-gradient(90deg, var(--wall) 0 38px, var(--wall2) 38px 40px); min-height:100vh; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 18px 8px; flex-wrap:wrap; }
+  header h1 { margin:0; font-size:22px; letter-spacing:.02em; }
+  header h1 small { font-size:13px; color:var(--muted); font-weight:500; margin-left:6px; }
+  .horloge { font-variant-numeric:tabular-nums; color:var(--muted); font-size:14px; }
+  .horloge b { color:var(--ink); font-size:18px; }
+  a.retour { color:var(--muted); font-size:13px; }
+
+  /* fenêtres : jour / nuit */
+  .fenetres { display:flex; gap:14px; padding:0 18px; }
+  .fenetre { flex:1; height:62px; border:6px solid #fff; border-radius:6px; position:relative; overflow:hidden;
+             background:linear-gradient(var(--sky), var(--sky2)); box-shadow:inset 0 0 0 2px #d8d0c0; }
+  body.nuit .fenetre { border-color:#5a5f78; box-shadow:none; }
+  .fenetre::after { content:""; position:absolute; inset:0; background:linear-gradient(90deg, transparent 49%, #fff 49% 51%, transparent 51%); }
+  body.nuit .fenetre::after { background:linear-gradient(90deg, transparent 49%, #5a5f78 49% 51%, transparent 51%); }
+  .astre { position:absolute; top:8px; font-size:24px; animation:flotte 9s ease-in-out infinite; }
+  .nuage { position:absolute; top:14px; font-size:22px; opacity:.9; animation:derive 40s linear infinite; }
+
+  main { padding:12px 18px 90px; max-width:1300px; margin:0 auto; }
+
+  /* tableau blanc */
+  .tableau { background:#fdfdfb; color:#2b2622; border:10px solid #9aa3ad; border-radius:8px; padding:12px 16px 10px;
+             box-shadow:0 6px 0 #7d858e; margin-bottom:22px; display:grid; grid-template-columns:repeat(auto-fit, minmax(230px,1fr)); gap:10px 22px; }
+  .tableau h2 { grid-column:1/-1; margin:0; font:700 16px "Comic Sans MS", "Segoe Print", cursive; color:#2f5fb3; }
+  .note { font:15px "Comic Sans MS", "Segoe Print", cursive; }
+  .note b { color:#c0392b; }
+  .barre { height:14px; background:#e6e6e6; border-radius:8px; overflow:hidden; margin-top:4px; border:1px solid #ccc; }
+  .barre i { display:block; height:100%; background:linear-gradient(90deg,#f39c12,#2ecc71); transition:width 1s; }
+
+  /* plateau de bureaux */
+  .plateau { display:grid; grid-template-columns:repeat(auto-fill, minmax(270px, 1fr)); gap:26px 20px;
+             background:repeating-linear-gradient(45deg, var(--floor) 0 22px, var(--floor2) 22px 44px);
+             padding:56px 18px 22px; border-radius:14px; box-shadow:inset 0 8px 0 rgba(0,0,0,.08); }
+  .poste { position:relative; display:flex; flex-direction:column; align-items:center; min-height:270px; }
+  .bulle { position:relative; background:var(--bubble); color:#2b2622; border-radius:14px; padding:8px 11px; font-size:13.5px;
+           min-height:52px; width:100%; box-shadow:0 3px 0 rgba(0,0,0,.15); transition:opacity .35s; margin-bottom:12px; }
+  .bulle::after { content:""; position:absolute; bottom:-10px; left:50%; margin-left:-9px; border:10px solid transparent;
+                  border-top-color:var(--bubble); border-bottom:0; }
+  .bulle.fade { opacity:0; }
+  .perso { font-size:54px; line-height:1; position:relative; z-index:2; margin-bottom:-14px; animation:tape 1.1s ease-in-out infinite; }
+  .perso.dort { animation:none; filter:grayscale(1); opacity:.75; }
+  .perso.fete { animation:saute .5s ease-in-out 6; }
+  .zzz { position:absolute; right:-18px; top:-8px; font-size:20px; animation:zzz 2.4s ease-in-out infinite; }
+  .bureau { width:100%; background:var(--desk-top); border-radius:8px 8px 4px 4px; padding:10px 10px 8px; position:relative;
+            box-shadow:0 10px 0 var(--desk), 0 16px 10px rgba(0,0,0,.18); }
+  .ecran { background:var(--screen); color:var(--screen-text); font:600 13px ui-monospace, Consolas, monospace; border-radius:6px;
+           border:4px solid #11161d; padding:6px 8px; min-height:58px; margin:0 auto 6px; width:86%; box-shadow:0 4px 0 #11161d; }
+  .ecran .grand { font-size:20px; color:#fff; }
+  .ecran .petit { color:#9fb3c8; font-weight:500; font-size:11.5px; }
+  .ecran.panne { color:#ff8a80; }
+  .plaque { display:flex; align-items:center; justify-content:space-between; gap:6px; background:#f7e7c6; color:#4a3826;
+            border-radius:5px; padding:3px 8px; font-size:12.5px; font-weight:600; }
+  .lampe { width:11px; height:11px; border-radius:50%; background:var(--good); box-shadow:0 0 8px var(--good); flex:none; }
+  .lampe.ko { background:var(--bad); box-shadow:0 0 8px var(--bad); animation:clign 1s infinite; }
+  .deco { position:absolute; bottom:-6px; font-size:20px; }
+  .deco.g { left:4px; } .deco.d { right:4px; }
+
+  /* coin café */
+  .cafe { display:flex; align-items:flex-end; justify-content:center; gap:14px; font-size:34px; grid-column:1/-1; opacity:.9; }
+  .vapeur { position:relative; }
+  .vapeur::before { content:"♨"; position:absolute; top:-26px; left:6px; font-size:20px; color:#fff; opacity:.8; animation:vapeur 2.5s infinite; }
+
+  /* avion en papier (alerte envoyée) */
+  .avion { position:fixed; font-size:34px; z-index:20; pointer-events:none; animation:vole 2.6s ease-in forwards; }
+  .confetti { position:fixed; font-size:20px; z-index:20; pointer-events:none; animation:tombe 1.8s ease-in forwards; }
+
+  /* radio */
+  .radio { position:fixed; left:0; right:0; bottom:0; background:#2b2622; color:#f7e7c6; display:flex; align-items:center;
+           gap:10px; padding:9px 14px; font-size:14px; z-index:10; box-shadow:0 -4px 12px rgba(0,0,0,.25); }
+  .radio .poste-radio { font-size:22px; flex:none; }
+  .defile { overflow:hidden; white-space:nowrap; flex:1; mask-image:linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent); }
+  .defile span { display:inline-block; padding-left:100%; animation:defile 60s linear infinite; }
+  .aide { cursor:pointer; background:#f7e7c6; color:#2b2622; border:0; border-radius:50%; width:26px; height:26px; font-weight:700; flex:none; }
+  .legende { display:none; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 14px; margin-bottom:16px; font-size:14px; }
+  .legende.on { display:block; }
+  .legende p { margin:4px 0; }
+
+  @keyframes tape { 0%,100% { transform:translateY(0) rotate(0); } 50% { transform:translateY(-4px) rotate(-2deg); } }
+  @keyframes saute { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-22px) scale(1.1); } }
+  @keyframes zzz { 0% { opacity:0; transform:translate(0,6px) scale(.7); } 50% { opacity:1; } 100% { opacity:0; transform:translate(10px,-18px) scale(1.2); } }
+  @keyframes clign { 50% { opacity:.3; } }
+  @keyframes flotte { 50% { transform:translateY(4px); } }
+  @keyframes derive { from { left:-40px; } to { left:110%; } }
+  @keyframes vapeur { 0% { opacity:0; transform:translateY(6px); } 50% { opacity:.8; } 100% { opacity:0; transform:translateY(-10px); } }
+  @keyframes vole { 0% { opacity:1; transform:translate(0,0) rotate(-10deg); } 100% { opacity:0; transform:translate(70vw,-60vh) rotate(20deg) scale(.6); } }
+  @keyframes tombe { 0% { opacity:1; transform:translateY(0) rotate(0); } 100% { opacity:0; transform:translateY(160px) rotate(360deg); } }
+  @keyframes defile { from { transform:translateX(0); } to { transform:translateX(-100%); } }
+  @media (prefers-reduced-motion: reduce) { * { animation:none !important; } }
+  @media (max-width:600px) { .plateau { padding:46px 10px 16px; } main { padding:10px 10px 90px; } .perso { font-size:46px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏢 APEX &amp; Cie <small>le bureau, en direct</small></h1>
+  <div class="horloge">Paris <b id="heure">--:--</b> · <a class="retour" id="lien-tech" href="/">tableau de bord technique</a></div>
+</header>
+<div class="fenetres"><div class="fenetre"><span class="astre" id="astre" style="left:20%">☀️</span><span class="nuage">☁️</span></div>
+  <div class="fenetre"><span class="nuage" style="animation-delay:-18s">☁️</span></div>
+  <div class="fenetre"><span class="nuage" style="animation-delay:-30s;top:6px">☁️</span></div></div>
+<main>
+  <div class="legende" id="legende">
+    <p><b>Comment lire ce bureau ?</b> Chaque employé est une partie du bot. Sa lampe est verte s'il travaille, rouge s'il ne répond plus (il dort 😴).
+       Les bulles montrent ce qu'il fait <i>en ce moment</i>, avec les vrais chiffres. Tout se met à jour toutes les 5 secondes.</p>
+    <p>📡 <b>Léa</b> surveille la blockchain et reçoit chaque achat/vente · 🔍 <b>Hugo</b> étudie chaque nouveau token et décide s'il est intéressant ·
+       ⏱️ <b>Inès</b> regarde ce que deviennent les tokens (le bot apprend de ses résultats) · 🧪 <b>Max</b> entraîne les modèles qui prédisent ·
+       💹 <b>Sam</b> fait les trades d'entraînement (argent fictif) · 👩‍💼 <b>Nadia</b> la cheffe surveille tout et vérifie les calculs ·
+       📮 <b>Paulo</b> t'envoie les alertes Telegram · 🤖 <b>Claude</b> le consultant propose des idées d'amélioration.</p>
+  </div>
+  <div class="tableau" id="tableau"><h2>📋 Tableau du jour</h2></div>
+  <div class="plateau" id="plateau"></div>
+</main>
+<div class="radio"><span class="poste-radio">📻</span><div class="defile"><span id="radio">Radio du bureau : connexion…</span></div>
+  <button class="aide" id="aide" title="Comment lire ce bureau ?">?</button></div>
+
+<script>
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+const api = p => fetch(p + (p.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN)).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+document.getElementById("lien-tech").href = "/?token=" + encodeURIComponent(TOKEN);
+document.getElementById("aide").onclick = () => document.getElementById("legende").classList.toggle("on");
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const nf = (x, d = 0) => x == null || isNaN(x) ? "—" : Number(x).toLocaleString("fr-FR", {maximumFractionDigits:d, minimumFractionDigits:d});
+const pct = (x, d = 1) => x == null ? "—" : (x > 0 ? "+" : "") + nf(x * 100, d) + " %";
+const sol = x => x == null ? "—" : (x > 0 ? "+" : "") + nf(x, 3) + " SOL";
+const duree = s => s == null ? "—" : s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${nf(s / 3600, 1)} h`;
+const MODELES = { rules:"la règle de départ", mcbase:"le modèle « capitalisation »", logreg:"le modèle linéaire", arf:"la forêt d'arbres",
+                  hat:"l'arbre adaptatif", prior:"la moyenne (il ne prétend rien savoir)" };
+const modele = id => !id ? "—" : MODELES[id] || (id.startsWith("lgbm_v") ? `LightGBM n°${id.slice(6)}` : id.startsWith("shadow") ? "un modèle en test" : id);
+const ETATS = { APPRENTISSAGE:"à l'entraînement (argent fictif)", PRET:"PRÊT pour le réel 🟢", ACTIF:"trade en réel 🚀", SUSPENDU:"en pause, il a régressé 🟠" };
+
+const EMPLOYES = [
+  { id:"guetteur", svc:"ingestor", emoji:"🧑‍🚀", nom:"Léa", role:"guetteuse", deco:["📡","🔭"] },
+  { id:"analyste", svc:"features", emoji:"🕵️", nom:"Hugo", role:"analyste", deco:["🔍","📚"] },
+  { id:"chrono", svc:"labeler", emoji:"👩‍🔬", nom:"Inès", role:"chronométreuse", deco:["⏱️","📈"] },
+  { id:"chercheur", svc:"learner", emoji:"🧑‍🏫", nom:"Max", role:"chercheur", deco:["🧪","🧠"] },
+  { id:"trader", svc:"trader", emoji:"🧑‍💼", nom:"Sam", role:"trader", deco:["💹","💰"] },
+  { id:"cheffe", svc:"supervisor", emoji:"👩‍💼", nom:"Nadia", role:"cheffe", deco:["☕","📋"] },
+  { id:"facteur", svc:"notifier", emoji:"🧑‍✈️", nom:"Paulo", role:"facteur", deco:["📮","✉️"] },
+  { id:"claude", svc:null, emoji:"🤖", nom:"Claude", role:"consultant", deco:["💡","🗂️"] },
+];
+
+const plateau = document.getElementById("plateau");
+plateau.innerHTML = EMPLOYES.map(e => `
+  <div class="poste" id="p-${e.id}">
+    <div class="bulle" id="b-${e.id}">…</div>
+    <div class="perso" id="f-${e.id}">${e.emoji}</div>
+    <div class="bureau">
+      <div class="ecran" id="e-${e.id}">…</div>
+      <div class="plaque"><span>${e.nom} · ${e.role}</span><span class="lampe" id="l-${e.id}"></span></div>
+      <span class="deco g">${e.deco[0]}</span><span class="deco d">${e.deco[1]}</span>
+    </div>
+  </div>`).join("") + `<div class="cafe"><span>🪴</span><span class="vapeur">☕</span><span>🍩</span><span>🛋️</span><span>🪴</span></div>`;
+
+let phrases = {}, tour = 0, avant = null;
+
+function rendre(d) {
+  const v = d.vie || {};
+  const g = d.guetteur, a = d.analyste, c = d.chrono, m = d.chercheur, t = d.trader, n = d.cheffe, f = d.facteur, cl = d.claude;
+  const ent = t.entrainement || {};
+  // ---- écrans (chiffre principal) ----
+  const ecrans = {
+    guetteur: `<div class="grand">${nf(g.par_min)}</div><div class="petit">achats/ventes par minute · retard ${nf(g.retard_s, 1)} s</div>`,
+    analyste: `<div class="grand">${nf(g.lancements_h)}</div><div class="petit">nouveaux tokens / heure · ${nf(a.candidats)} prometteurs</div>`,
+    chrono:   `<div class="grand">${nf(c.suivis)}</div><div class="petit">tokens suivis · ${nf(c.en_attente)} résultats en attente</div>`,
+    chercheur:`<div class="grand">${nf(m.par_heure)}</div><div class="petit">leçons apprises / heure · ${nf(m.appris)} au total</div>`,
+    trader:   `<div class="grand">${sol(ent.pnl_sol)}</div><div class="petit">${nf(ent.n)} trades d'entraînement · ${nf(ent.ouverts)} en cours</div>`,
+    cheffe:   `<div class="grand">${n.coherence_ok === false ? "⚠️ À VÉRIFIER" : "✔ TOUT EST OK"}</div><div class="petit">dernière ronde il y a ${duree(n.age_s)}</div>`,
+    facteur:  `<div class="grand">${nf(f.alertes_jour)}</div><div class="petit">alertes envoyées aujourd'hui</div>`,
+    claude:   `<div class="grand">${nf(cl.idees_validees)}/${nf(cl.idees)}</div><div class="petit">idées acceptées / proposées</div>`,
+  };
+  // ---- bulles (ce qu'ils disent) ----
+  const dern = (f.dernieres || [])[0];
+  phrases = {
+    guetteur: [
+      g.par_min != null ? `Je reçois <b>${nf(g.par_min)}</b> achats/ventes par minute depuis la blockchain.` : "Je branche mes jumelles sur la blockchain…",
+      `Mes infos arrivent avec <b>${nf(g.retard_s, 1)} s</b> de retard. ${g.retard_s != null && g.retard_s < 2 ? "Rapide comme l'éclair ⚡" : "Un peu lent aujourd'hui."}`,
+      `Ambiance du marché : <b>${{hot:"très agitée 🔥", normal:"normale", cold:"calme 🧊"}[g.ambiance] || esc(g.ambiance)}</b> — ${nf(g.lancements_h)} lancements et ${nf(g.migrations_h)} migrations par heure.`,
+      `Je surveille aussi <b>${nf(g.pools)}</b> tokens déjà « diplômés » (migrés). Le SOL vaut ${nf(g.sol_usd, 0)} $.`],
+    analyste: [
+      `Dernière décision il y a <b>${duree(a.depuis_derniere_s)}</b>. J'étudie chaque token à 10 s, 15 s, 30 s, 1, 2, 5 et 10 minutes.`,
+      `<b>${nf(a.candidats)}</b> tokens prometteurs : je vérifie qui les finance (${nf(a.credits)}/${nf(a.credits_max)} vérifications aujourd'hui).`,
+      "Je regarde les acheteurs, les robots, le développeur, la vitesse… puis je passe le dossier à Max 🧪."],
+    chrono: [
+      `Je suis <b>${nf(c.suivis)}</b> tokens pour voir ce qu'ils deviennent : c'est comme ça que le bot apprend.`,
+      `<b>${nf(c.simules)}</b> trades d'entraînement en simulation, et ${nf(c.migres)} tokens migrés suivis.`,
+      `J'ai noté <b>${nf(c.situations)}</b> moments clés pour apprendre QUAND revendre.`],
+    chercheur: [
+      `C'est <b>${esc(modele(m.champion))}</b> qui décide en ce moment${m.gain_vs_hasard != null ? ` : il se trompe ${nf(m.gain_vs_hasard * 100, 0)} % moins qu'au hasard` : ""}.`,
+      `<b>${nf(m.concurrents)}</b> modèles s'affrontent pour la place. Le meilleur gagne, tout seul.`,
+      `J'entraîne un nouveau modèle chaque heure (dernier : LightGBM n°${nf(m.lgbm_version)}). ${nf(m.par_heure)} leçons apprises cette heure-ci !`],
+    trader: [
+      `Je suis <b>${esc(ETATS[t.etat] || t.etat || "—")}</b>. Critères pour passer au réel : <b>${nf(t.criteres_ok)}/${nf(t.criteres)}</b>.`,
+      `Sur 24 h : <b>${nf(ent.n24)}</b> trades d'entraînement, ${sol(ent.pnl24)}. Au total : ${nf(ent.n)} trades, ${sol(ent.pnl_sol)}.`,
+      t.meilleure_sortie ? `Meilleure façon de revendre en ce moment : « ${esc(t.meilleure_sortie.description)} » (${pct(t.meilleure_sortie.mean)} par trade).` : "Je compare des dizaines de façons de revendre.",
+      `Dans le simulateur réaliste : ${nf(t.n)} trades, ${pct(t.rendement)} en moyenne. Pas un centime réel engagé 😇`],
+    cheffe: [
+      n.coherence_ok === false ? `Hmm… ma vérification trouve un souci : ${esc(n.coherence)}` : "J'ai recalculé chaque trade et comparé chaque vente au vrai marché : tout est cohérent ✔",
+      `Je fais ma ronde toutes les 15 minutes (la dernière a pris ${nf(n.duree_s, 0)} s).`,
+      (n.evenements || []).length ? `Note de la ronde : ${esc(n.evenements[0])}` : "Rien à signaler sur ma dernière ronde. ☕"],
+    facteur: [
+      `<b>${nf(f.alertes_jour)}</b> alertes envoyées sur Telegram aujourd'hui.`,
+      dern ? `Dernière alerte : <b>$${esc(dern.symbol || "?")}</b>, à ${new Date(dern.ts).toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit", timeZone:"Europe/Paris"})}.` : "Pas d'alerte depuis 24 h : rien d'assez prometteur.",
+      "Je n'envoie une alerte que quand Max est vraiment convaincu. ✉️"],
+    claude: [
+      cl.ok ? "Je suis joignable. Quand le bot bloque sur un type d'erreur, il me demande une idée." : "Je ne suis pas joignable en ce moment.",
+      `<b>${nf(cl.idees_validees)}</b> de mes idées ont été gardées, sur ${nf(cl.idees)} testées. Les autres n'ont pas fait mieux.`,
+      "Mon collègue Claude Code passe aussi 4 fois par jour faire une inspection complète. 🔧"],
+  };
+  // ---- lampes, sommeil, écrans ----
+  for (const e of EMPLOYES) {
+    const age = e.svc ? v[e.svc] : (cl.ok ? 0 : 99999);
+    const dort = age == null || age > 90;
+    document.getElementById("l-" + e.id).classList.toggle("ko", dort);
+    const fig = document.getElementById("f-" + e.id);
+    fig.classList.toggle("dort", dort);
+    fig.innerHTML = dort ? `😴<span class="zzz">💤</span>` : e.emoji;
+    const ec = document.getElementById("e-" + e.id);
+    ec.classList.toggle("panne", dort);
+    ec.innerHTML = dort ? `<div class="grand">PAUSE</div><div class="petit">ne répond plus depuis ${duree(age)}</div>` : ecrans[e.id];
+    if (dort) phrases[e.id] = [`…zzz… (je ne réponds plus depuis ${duree(age)} — le bot me relance tout seul)`];
+  }
+  // ---- tableau blanc ----
+  const ok = t.criteres_ok || 0, tot = t.criteres || 8;
+  document.getElementById("tableau").innerHTML = `<h2>📋 Tableau du jour</h2>
+    <div class="note">🎯 Objectif : passer au trading réel<br><b>${ok}/${tot}</b> critères remplis
+      <div class="barre"><i style="width:${Math.round(100 * ok / tot)}%"></i></div></div>
+    <div class="note">🏋️ Entraînement (argent fictif)<br>${nf(ent.n)} trades · <b>${sol(ent.pnl_sol)}</b><br>dernières 24 h : ${nf(ent.n24)} trades, ${sol(ent.pnl24)}</div>
+    <div class="note">🧠 Qui décide ?<br><b>${esc(modele(m.champion))}</b><br>${nf(m.concurrents)} modèles en compétition</div>
+    <div class="note">📡 Données<br>retard <b>${nf(g.retard_s, 1)} s</b> · ${nf(g.par_min)} trades/min<br>${n.coherence_ok === false ? "⚠️ vérification à revoir" : "✔ calculs vérifiés"}</div>`;
+  // ---- radio ----
+  const KIND = { champion:"🏆", lgbm:"🧪", evolution:"🧬", coherence:"🔎", menage:"🧹", urgent:"🚨", rollback:"↩️", trading:"💹", claude:"🤖", report:"📰", ev:"📊" };
+  const fil = (d.fil || []).map(e => `${KIND[e.kind] || "•"} ${new Date(e.ts).toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit", timeZone:"Europe/Paris"})} — ${esc(e.message)}`);
+  document.getElementById("radio").innerHTML = fil.length ? fil.join("   ·   ") : "Radio du bureau : journée calme, tout le monde travaille.";
+  // ---- petits événements festifs ----
+  if (avant) {
+    if ((f.alertes_jour || 0) > (avant.facteur.alertes_jour || 0)) envoleAvion();
+    if (m.champion && m.champion !== avant.chercheur.champion) fete("chercheur", `🎉 Nouveau patron des prédictions : <b>${esc(modele(m.champion))}</b> !`);
+    if ((m.lgbm_version || 0) > (avant.chercheur.lgbm_version || 0)) dire("chercheur", `Nouveau modèle tout frais : LightGBM n°${nf(m.lgbm_version)} 🧪`);
+  }
+  avant = d;
+}
+
+function dire(id, html) {
+  const b = document.getElementById("b-" + id);
+  b.classList.add("fade");
+  setTimeout(() => { b.innerHTML = html; b.classList.remove("fade"); }, 350);
+}
+function fete(id, html) {
+  dire(id, html);
+  const fig = document.getElementById("f-" + id);
+  fig.classList.remove("fete"); void fig.offsetWidth; fig.classList.add("fete");
+  const r = fig.getBoundingClientRect();
+  for (let i = 0; i < 14; i++) {
+    const c = document.createElement("span");
+    c.className = "confetti"; c.textContent = ["🎉","✨","🎊","⭐"][i % 4];
+    c.style.left = (r.left + Math.random() * 120 - 40) + "px"; c.style.top = (r.top - 20 + Math.random() * 30) + "px";
+    c.style.animationDelay = (Math.random() * .4) + "s";
+    document.body.appendChild(c); setTimeout(() => c.remove(), 2600);
+  }
+}
+function envoleAvion() {
+  const r = document.getElementById("f-facteur").getBoundingClientRect();
+  const av = document.createElement("span");
+  av.className = "avion"; av.textContent = "📨";
+  av.style.left = r.left + "px"; av.style.top = r.top + "px";
+  document.body.appendChild(av); setTimeout(() => av.remove(), 2800);
+  fete("facteur", `📨 Nouvelle alerte envoyée sur Telegram !`);
+}
+
+function tourner() {
+  tour++;
+  for (const e of EMPLOYES) {
+    const l = phrases[e.id];
+    if (!l || !l.length) continue;
+    // décalage par employé : les bulles ne changent pas toutes en même temps
+    if ((tour + EMPLOYES.indexOf(e)) % 2) continue;
+    dire(e.id, l[Math.floor(tour / 2 + EMPLOYES.indexOf(e)) % l.length]);
+  }
+}
+
+function horloge() {
+  const now = new Date();
+  const h = Number(now.toLocaleString("fr-FR", {hour:"2-digit", hour12:false, timeZone:"Europe/Paris"}));
+  document.getElementById("heure").textContent = now.toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit", timeZone:"Europe/Paris"});
+  const nuit = h < 7 || h >= 21;
+  document.body.classList.toggle("nuit", nuit);
+  const astre = document.getElementById("astre");
+  astre.textContent = nuit ? "🌙" : "☀️";
+  astre.style.left = (nuit ? 70 : 10 + 70 * Math.min(1, Math.max(0, (h - 7) / 14))) + "%";
+}
+
+async function maj() {
+  try { rendre(await api("/api/bureau")); }
+  catch (err) { document.getElementById("radio").textContent = "📻 Le bureau ne répond pas (" + err.message + ") — nouvelle tentative dans 5 s."; }
+}
+horloge(); maj(); setInterval(maj, 5000); setInterval(tourner, 3500); setInterval(horloge, 30000);
+setTimeout(tourner, 600);
+</script>
+</body>
+</html>

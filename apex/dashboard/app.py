@@ -156,6 +156,86 @@ async def devs(_: None = Depends(auth)) -> list[dict]:
         """SELECT address, n_tokens, n_rugs, n_winners FROM devs WHERE n_rugs > 0 ORDER BY n_rugs DESC LIMIT 100"""))
 
 
+@app.get("/bureau")
+async def bureau_page(_: None = Depends(auth)) -> FileResponse:
+    return FileResponse(STATIC / "bureau.html")
+
+
+@app.get("/api/bureau")
+async def bureau(_: None = Depends(auth)) -> dict:
+    """Le bureau : ce que fait chaque « employé » (service) en ce moment, en chiffres simples.
+    Uniquement des lectures légères (Redis + quelques petites requêtes bornées)."""
+    import time
+
+    bus, now = state["bus"], time.time()
+    g = lambda k: bus.get_json(k, {})      # noqa: E731
+    hb = await bus.heartbeats()
+    ing, lag, mkt = await g("apex:ingestor:stats") or {}, await g("apex:feed:lag") or {}, await g("apex:market") or {}
+    lab, trd, ts_ = await g("apex:labeler:stats") or {}, await g("apex:trader:stats") or {}, await g("apex:trading:status") or {}
+    ln, health = await g("apex:learner:state") or {}, await g("apex:learning:health") or {}
+    sup, co, cl = await g("apex:supervisor:last_cycle") or {}, await g("apex:consistency") or {}, await g("apex:claude:status") or {}
+    enr, board = await g("apex:enrichment") or {}, await g("apex:exits:board") or {}
+    # débit du guetteur : écart du compteur d'événements depuis l'appel précédent
+    prev = state.get("bureau_prev")
+    ev = int(ing.get("events", 0) or 0)
+    rate = None
+    if prev and now - prev[0] > 1 and ev >= prev[1]:
+        rate = round((ev - prev[1]) / (now - prev[0]) * 60)
+    state["bureau_prev"] = (now, ev)
+    primary = state["cfg"]["labels"]["primary"]
+    ens = (ln.get("ensembles") or {}).get(primary) or {}
+    champ = ens.get("champion")
+    champ_ll = next((c.get("logloss") for c in ens.get("competitors", []) if c["id"] == champ), None)
+    prior_ll = next((c.get("logloss") for c in ens.get("competitors", []) if c["id"] == "prior"), None)
+    alerts = rows(await db().fetch(
+        """SELECT a.ts, t.symbol, t.name FROM alerts a LEFT JOIN tokens t USING (mint)
+           WHERE a.ts > now() - interval '24 hours' ORDER BY a.ts DESC LIMIT 4"""))
+    events = rows(await db().fetch(
+        """SELECT ts, kind, left(message, 140) message FROM system_events
+           WHERE ts > now() - interval '12 hours' AND kind IN ('champion','lgbm','evolution','coherence','menage',
+                 'urgent','rollback','trading','claude','report','ev') ORDER BY ts DESC LIMIT 12"""))
+    paper = await db().fetchrow(
+        """SELECT count(*) FILTER (WHERE status='closed') n, count(*) FILTER (WHERE status='open') ouverts,
+                  coalesce(sum(pnl_sol) FILTER (WHERE status='closed'), 0) pnl_sol,
+                  count(*) FILTER (WHERE status='closed' AND closed_at > now() - interval '24 hours') n24,
+                  coalesce(sum(pnl_sol) FILTER (WHERE status='closed' AND closed_at > now() - interval '24 hours'), 0) pnl24
+           FROM paper_positions""")
+    cfeat = await db().fetchrow(
+        "SELECT count(*) FILTER (WHERE status='validated') ok, count(*) n, max(created_at) dernier FROM claude_features")
+    best = next((r for r in (board.get("selection") or []) if int(r.get("n", 0)) >= 300), None)
+    checks = ts_.get("checks") or {}
+    return {
+        "now": now,
+        "vie": {s: round(now - t) for s, t in hb.items()},
+        "guetteur": {"par_min": rate, "retard_s": lag.get("moyen_5min"), "en_retard": ing.get("late"),
+                     "reconnexions": ing.get("reconnects"), "lancements_h": mkt.get("launches_per_h"),
+                     "migrations_h": mkt.get("migrations_per_h"), "ambiance": mkt.get("regime"),
+                     "sol_usd": mkt.get("sol_price_usd"), "pools": ing.get("pumpswap_pools")},
+        "analyste": {"depuis_derniere_s": round(now - (ln.get("last_decision_ts") or now)),
+                     "candidats": enr.get("candidates"), "credits": enr.get("credits_used_today"),
+                     "credits_max": enr.get("credits_budget")},
+        "chrono": {"suivis": lab.get("tracked"), "en_attente": lab.get("pending"),
+                   "migres": lab.get("migrated_followed"), "simules": lab.get("simulated_decisions"),
+                   "situations": (lab.get("sortie_apprise") or {}).get("situations_apprises")},
+        "chercheur": {"appris": ln.get("n_labels"), "par_heure": health.get("labels_last_hour"),
+                      "champion": champ, "gain_vs_hasard": (round(1 - champ_ll / prior_ll, 3)
+                                                             if champ_ll and prior_ll else None),
+                      "concurrents": len(ens.get("competitors", [])), "lgbm_version": ln.get("lgbm_version")},
+        "trader": {"etat": ts_.get("state"), "criteres_ok": sum(1 for v in checks.values() if v and v[0]),
+                   "criteres": len(checks), "n": (ts_.get("stats") or {}).get("n"),
+                   "rendement": (ts_.get("stats") or {}).get("total_return"), "ouverts": trd.get("open_positions"),
+                   "entrainement": {k: (float(v) if v is not None else None) for k, v in dict(paper or {}).items()},
+                   "meilleure_sortie": best and {"description": best.get("description"), "mean": best.get("mean")}},
+        "cheffe": {"age_s": round(now - (sup.get("ts") or now)), "duree_s": sup.get("duration_s"),
+                   "evenements": (sup.get("events") or [])[:3], "coherence_ok": co.get("ok"), "coherence": co.get("resume")},
+        "facteur": {"alertes_jour": ln.get("alerts_today"), "dernieres": alerts},
+        "claude": {"ok": cl.get("ok"), "vu_s": round(now - cl["ts"]) if cl.get("ts") else None,
+                   "idees_validees": cfeat and cfeat["ok"], "idees": cfeat and cfeat["n"],
+                   "derniere_idee": cfeat and cfeat["dernier"]},
+        "fil": events,
+    }
+
+
 def main() -> None:
     import uvicorn
 
