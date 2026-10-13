@@ -75,7 +75,7 @@ def build_river_model(spec: CompetitorSpec, seed: int = 42) -> Any:
     if spec.kind == "rules":
         return None
     p = spec.params
-    if spec.kind in ("logreg", "mcbase"):
+    if spec.kind == "logreg":
         return compose.Pipeline(
             preprocessing.StandardScaler(),
             linear_model.LogisticRegression(optimizer=optim.SGD(p.get("lr", 0.01)), l2=p.get("l2", 1e-4)),
@@ -99,7 +99,7 @@ def _accepts_w(model: Any) -> bool:
 class Competitor:
     def __init__(self, spec: CompetitorSpec, window: int = 3000, calib_method: str = "platt", seed: int = 42):
         self.spec = spec
-        self.model: Any = None if spec.kind in ("lgbm", "rules", "prior") else build_river_model(spec, seed)
+        self.model: Any = None if spec.kind in ("lgbm", "rules", "prior", "mcbase") else build_river_model(spec, seed)
         self._w_ok = self.model is not None and _accepts_w(self.model)
         self.losses: deque[float] = deque(maxlen=window)
         self.hits: deque[int] = deque(maxlen=window)
@@ -137,6 +137,11 @@ class Competitor:
                 return 0.5
             vec = np.array([[xf.get(f, np.nan) for f in self.lgbm_features]])
             return float(self.booster.predict(vec)[0])
+        if self.spec.kind == "mcbase":
+            if self.booster is not None:
+                return float(self.booster.predict(np.array([[xf["lmc"], xf["lage"]]]))[0])
+            if self.model is None or self.n_learned == 0:       # ancienne version (apprentissage en ligne)
+                return 0.5
         if self.n_learned == 0:
             return 0.5
         proba = self.model.predict_proba_one(xf)
@@ -177,7 +182,7 @@ class Competitor:
             self._prior_k = getattr(self, "_prior_k", 0.0) * 0.9999 + y
             self.n_learned += 1
             return
-        if self.spec.kind in ("lgbm", "rules"):
+        if self.spec.kind in ("lgbm", "rules") or (self.spec.kind == "mcbase" and self.model is None):
             return
         xf = self.filter_x(x)
         if self._w_ok:
@@ -196,6 +201,8 @@ class Competitor:
             return True
         if self.spec.kind == "lgbm":
             return self.booster is not None
+        if self.spec.kind == "mcbase":
+            return self.booster is not None or (self.model is not None and self.n_learned >= 50)
         return self.n_learned >= 50
 
     def reset_eval(self) -> None:
@@ -224,6 +231,20 @@ class Competitor:
         for k, v in changes.items():
             setattr(spec, k, v)
         return spec
+
+
+def train_mcbase(rows: list[tuple[dict, int, float]]) -> Any:
+    """Modèle « capitalisation » réentraîné d'un bloc (13/10) : en ligne, ses réglages bougeaient tant qu'à âge égal il
+    classait moins bien que la capitalisation brute (0,72 contre 0,81). Contrainte : à âge égal, une capitalisation
+    plus forte ne fait jamais baisser la note."""
+    import lightgbm as lgb
+
+    X = np.array([[f["lmc"], f["lage"]] for f in (mc_features(x) for x, _, _ in rows)], dtype=float)
+    y = np.array([r[1] for r in rows])
+    w = np.array([r[2] for r in rows])
+    p = {"objective": "binary", "learning_rate": 0.05, "num_leaves": 15, "min_data_in_leaf": 200,
+         "monotone_constraints": [1, 0], "verbose": -1}
+    return lgb.train(p, lgb.Dataset(X, label=y, weight=w), num_boost_round=200)
 
 
 def train_lgbm(rows: list[tuple[dict, int, float]], params: dict | None = None) -> tuple[Any, list[str]]:

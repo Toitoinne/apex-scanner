@@ -9,16 +9,21 @@ from apex.learning.models import Competitor, CompetitorSpec
 from apex.supervision.service import Supervisor
 
 
-def test_mcbase_learns_market_cap_ranking():
-    c = Competitor(CompetitorSpec(id="mcbase", kind="mcbase", params={"lr": 0.05}))
+def test_mcbase_batch_model_is_monotone_in_market_cap():
+    from apex.learning.models import train_mcbase
+    c = Competitor(CompetitorSpec(id="mcbase", kind="mcbase"))
+    assert not c.ready and c.predict({"mc_sol": 50, "age_s": 30})[0] == 0.5     # pas encore entraîné
     rng = random.Random(0)
-    for _ in range(4000):
-        mc = rng.uniform(25, 300)
-        x = {"mc_sol": mc, "age_s": 300, "bruit": rng.random()}
-        c.learn(x, int(rng.random() < mc / 400), 1.0)
-    lo = c.predict({"mc_sol": 30, "age_s": 300})[0]
-    hi = c.predict({"mc_sol": 250, "age_s": 300})[0]
-    assert hi > lo + 0.2
+    rows = []
+    for _ in range(6000):
+        mc, age = rng.uniform(25, 300), rng.choice([10, 60, 300, 600])
+        rows.append(({"mc_sol": mc, "age_s": age}, int(rng.random() < (mc / 400) ** 2 + 0.02), 1.0))
+    c.booster = train_mcbase(rows)
+    assert c.ready
+    for age in (10, 60, 300, 600):              # à âge égal : jamais moins bien noté avec une capitalisation plus forte
+        ps = [c.predict_raw({"mc_sol": mc, "age_s": age}) for mc in range(25, 300, 5)]
+        assert all(b >= a - 1e-9 for a, b in zip(ps, ps[1:])) and ps[-1] > ps[0] + 0.1
+    c.learn({"mc_sol": 50, "age_s": 30}, 1, 1.0)                              # pas d'apprentissage en ligne
     assert set(c.filter_x({"mc_sol": 50, "age_s": 10, "autre": 1})) == {"lmc", "lage", "lmc_lage"}
 
 

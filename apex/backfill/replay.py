@@ -13,7 +13,7 @@ from ..features.market import MarketContext
 from ..features.wallets import WalletIntel
 from ..labeler.engine import LabelerEngine
 from ..learning.core import Learner
-from ..learning.models import train_lgbm
+from ..learning.models import train_lgbm, train_mcbase
 from ..safety.filters import SafetyFilters
 
 log = logging.getLogger("backfill.replay")
@@ -68,6 +68,9 @@ class Replay:
                     if len(rows) >= self.cfg.get("models.lgbm_min_samples"):
                         booster, feats = train_lgbm(rows)
                         L.install_lgbm(h, booster, feats)
+                        mc = L.ensembles[h].competitors.get("mcbase")
+                        if mc is not None and sum(r[1] for r in rows) >= 20:
+                            mc.booster, mc.model = train_mcbase(rows), None
             self._next_lgbm = t + self.cfg.get("models.lgbm_every_s")
 
     def _decision(self, d: Any) -> None:

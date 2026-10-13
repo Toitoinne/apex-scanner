@@ -16,7 +16,7 @@ from .. import bus as B
 from ..config import Config, secrets
 from ..db import DB, ts
 from ..events import Decision, Label, Outcome
-from .core import Learner, train_lgbm_async
+from .core import Learner, train_lgbm_async, train_mcbase_async
 
 log = logging.getLogger("learner")
 GROUP = "learner"
@@ -234,6 +234,7 @@ class LearnerService:
         if now - last_lgbm >= c.get("models.lgbm_every_s"):
             for h in self.learner.horizons:
                 async with self._lock:
+                    await train_mcbase_async(self.learner, h)
                     cid = await train_lgbm_async(self.learner, h)
                 if cid:
                     await self.db.log_event("info", "lgbm", f"[{h}] {cid} ajouté comme concurrent")
@@ -256,6 +257,11 @@ class LearnerService:
         if self.latest.exists():
             log.info("restauration de l'état %s", self.latest)
             self.learner.restore(self.latest)
+        for h in self.learner.horizons:          # modèle « capitalisation » prêt dès le démarrage (jamais vide)
+            try:
+                await train_mcbase_async(self.learner, h)
+            except Exception:  # noqa: BLE001
+                log.exception("modèle capitalisation %s", h)
         await asyncio.gather(
             B.resilient("consume", lambda first: self.consume(first)),
             B.resilient("flush", lambda _: self.flush_loop()),

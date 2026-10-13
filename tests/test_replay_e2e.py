@@ -67,7 +67,8 @@ def test_replay_end_to_end(tmp_path):
     assert rp.n_decisions > 300
     assert len(rp.log) > 300                       # labels injectés et évalués
     ens = L.ensembles["L60"]
-    assert all(c.n_evaluated > 0 for c in ens.competitors.values() if c.spec.kind != "lgbm")
+    assert all(c.n_evaluated > 0 for c in ens.competitors.values() if c.spec.kind not in ("lgbm", "mcbase"))
+    assert ens.competitors["mcbase"].booster is not None       # réentraîné d'un bloc avec LightGBM
     assert ens.competitors["arf"].n_learned > 100
     assert any(c.spec.kind == "lgbm" for c in ens.competitors.values())
     assert "error_rate" in ref and 0 <= ref["error_rate"]["value"] <= 1

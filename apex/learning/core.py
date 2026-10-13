@@ -582,6 +582,21 @@ class Learner:
                 v["preds"] = {h: {c: p[c]} for h, p in v["preds"].items() for c in [v["champions"].get(h)] if c in p}
 
 
+async def train_mcbase_async(learner: Learner, horizon: str) -> bool:
+    """Réentraîne le modèle « capitalisation » sur tout le buffer récent (rapide : 2 indicateurs)."""
+    import asyncio
+
+    from .models import train_mcbase
+    ens = learner.ensembles[horizon]
+    c = ens.competitors.get("mcbase")
+    rows = learner.lgbm_rows(horizon, window=len(ens.replay))
+    if c is None or len(rows) < learner.cfg.get("models.lgbm_min_samples", 2000) or sum(r[1] for r in rows) < 20:
+        return False
+    c.booster = await asyncio.to_thread(train_mcbase, rows)
+    c.model = None                       # l'ancienne version en ligne n'est plus utilisée
+    return True
+
+
 async def train_lgbm_async(learner: Learner, horizon: str) -> str | None:
     import asyncio
 
