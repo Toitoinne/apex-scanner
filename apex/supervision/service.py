@@ -215,8 +215,15 @@ class Supervisor:
                 self._health_prev = {"ts": now, "n_outcomes": st.get("n_outcomes", 0)}
         else:
             problems.append("état du learner indisponible")
+        # redémarrages en boucle (13/10 : tué 11 fois en 3 h faute de mémoire, sans aucune alerte — ses signaux de
+        # vie restaient normaux entre deux arrêts)
+        starts = [float(x) for x in await self.bus.r.lrange("apex:learner:starts", 0, 49)]
+        n_starts = sum(1 for t in starts if now - t < 3600)
+        if n_starts >= 3:
+            problems.append(f"le module d'apprentissage a redémarré {n_starts} fois en 1 h (probablement un manque de mémoire "
+                            "du serveur) : il perd à chaque fois ses dernières minutes d'apprentissage")
         n_hour = await self.db.fetchval("SELECT count(*) FROM labels WHERE ts > now() - interval '1 hour'")
-        health = {"ts": now, "ok": not problems, "problems": problems, "labels_last_hour": n_hour,
+        health = {"ts": now, "ok": not problems, "problems": problems, "labels_last_hour": n_hour, "learner_starts_1h": n_starts,
                   "n_labels": st.get("n_labels") if st else None, "n_outcomes": st.get("n_outcomes") if st else None}
         await self.bus.set_json("apex:learning:health", health)
         if problems and now - getattr(self, "_last_health_alert", 0) > 3600:

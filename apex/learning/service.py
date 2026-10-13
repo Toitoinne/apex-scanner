@@ -254,6 +254,11 @@ class LearnerService:
         await self.bus.heartbeat("learner")
 
     async def run(self) -> None:
+        try:                                     # chaque démarrage est noté : le superviseur repère les redémarrages en boucle
+            await self.bus.r.lpush("apex:learner:starts", str(time.time()))
+            await self.bus.r.ltrim("apex:learner:starts", 0, 49)
+        except Exception:  # noqa: BLE001
+            log.exception("note du démarrage")
         if self.latest.exists():
             log.info("restauration de l'état %s", self.latest)
             self.learner.restore(self.latest)
