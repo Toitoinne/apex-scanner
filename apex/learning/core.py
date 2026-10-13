@@ -6,6 +6,7 @@ backfill. Applique aussi les commandes de correction envoyées par la boucle 2.
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
 import pickle
 import time
@@ -42,6 +43,11 @@ class LabelResult:
     error: ErrorRecord | None = None
     error_ctx: dict | None = None
     alert_result: dict | None = None
+
+
+def keep_long(decision_id: str, rate: float) -> bool:
+    """Échantillon déterministe (même décision → même choix, y compris après un redémarrage)."""
+    return int(hashlib.md5(decision_id.encode()).hexdigest()[:8], 16) % 10_000 < rate * 10_000
 
 
 class Learner:
@@ -120,21 +126,28 @@ class Learner:
             self.skipped_gap += 1
             self.last_candidate = False
             return rows, None
-        dc = DecisionCache(d=d, preds=preds, champions=champions, threshold=thr, remaining=len(self.short))
+        # seuls les tokens réellement alertables servent à évaluer les politiques d'alerte
+        eligible = (not d.blocked and d.features.get("unique_buyers", 0) >= self.cfg.get("bandit.min_buyers_to_alert", 10))
+        # mémoire (13/10 : learner tué toutes les 15 min) : pour une décision NON alertable, les prédictions des
+        # concurrents ne servent ni au choix du champion ni au recalage (focus=False) — seule celle du champion
+        # est gardée. Tous les concurrents apprennent toujours de 100 % des décisions.
+        kept = preds if eligible else {h: {champions[h]: preds[h][champions[h]]} for h in preds}
+        dc = DecisionCache(d=d, preds=kept, champions=champions, threshold=thr, remaining=len(self.short))
         self.cache[d.decision_id] = dc
         self.mint_preds.setdefault(d.mint, {})[d.point] = p
         scores = {sc: preds[h][champions[h]][1] for sc, h in self.score_horizons().items()}
-        # seuls les tokens réellement alertables servent à évaluer les politiques d'alerte
-        eligible = (not d.blocked and d.features.get("unique_buyers", 0) >= self.cfg.get("bandit.min_buyers_to_alert", 10))
         auto_policy = None
         if self.ev is not None:
             auto_policy, ev = self.ev.best(x) if eligible else (None, -1.0)
             scores["ev"] = ev
-        self.long_store[d.decision_id] = {
-            "ts": d.ts, "point": d.point, "mint": d.mint, "scores": scores, "alerted": False, "eligible": eligible,
-            "preds": {h: preds[h] for h in self.long}, "champions": {h: champions[h] for h in self.long},
-            "auto_policy": auto_policy,
-        }
+        # labels 6 h / 24 h : toutes les décisions alertables + un échantillon fixe des autres (288 000 entrées,
+        # 1,3 Go le 12/10, dont ~86 % de décisions non alertables)
+        if eligible or keep_long(d.decision_id, self.cfg.get("models.long_store_other_rate", 0.25)):
+            self.long_store[d.decision_id] = {
+                "ts": d.ts, "point": d.point, "mint": d.mint, "scores": scores, "alerted": False, "eligible": eligible,
+                "preds": {h: kept[h] for h in self.long}, "champions": {h: champions[h] for h in self.long},
+                "auto_policy": auto_policy,
+            }
         if eligible:
             self.bandit.observe_decision(d.point, scores, d.ts)
         alert = None
@@ -553,6 +566,20 @@ class Learner:
             self.cache = st["cache"]
             self.mint_preds = st["mint_preds"]
             self.long_store = st.get("long_store", {})
+            self.compact()
+
+    def compact(self) -> None:
+        """Applique la règle mémoire aux décisions déjà en attente (sauvegarde d'une version antérieure)."""
+        mb = self.cfg.get("bandit.min_buyers_to_alert", 10)
+        rate = self.cfg.get("models.long_store_other_rate", 0.25)
+        for dc in self.cache.values():
+            if dc.d.blocked or dc.d.features.get("unique_buyers", 0) < mb:
+                dc.preds = {h: {c: v[c]} for h, v in dc.preds.items() for c in [dc.champions.get(h)] if c in v}
+        for did in [k for k, v in self.long_store.items() if not v.get("eligible", True) and not keep_long(k, rate)]:
+            del self.long_store[did]
+        for v in self.long_store.values():
+            if not v.get("eligible", True):
+                v["preds"] = {h: {c: p[c]} for h, p in v["preds"].items() for c in [v["champions"].get(h)] if c in p}
 
 
 async def train_lgbm_async(learner: Learner, horizon: str) -> str | None:

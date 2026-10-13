@@ -208,6 +208,7 @@ models:
     AUTRE: 1.5
   positive_class_weight: 3.0
   non_alertable_weight: 0.2       # LightGBM : poids des décisions non alertables (le tri utile est sur les alertables)
+  long_store_other_rate: 0.25      # labels 6 h/24 h : part des décisions NON alertables gardées (mémoire du learner)
   max_sample_weight: 10.0
 
 calibration:
