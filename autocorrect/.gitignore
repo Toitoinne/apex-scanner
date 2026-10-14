@@ -9,3 +9,6 @@ next-env.d.ts
 test-results/
 playwright-report/
 AGENTS.md
+
+# Le .gitignore racine exclut data/ : on garde les données linguistiques de l’app
+!data/
