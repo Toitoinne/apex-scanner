@@ -25,6 +25,34 @@ def test_pumpswap_buy_and_sell_decoding():
     assert b["price"] * 1e9 == pytest.approx(433, rel=0.01)          # capitalisation ≈ 433 SOL
 
 
+
+# Vrais events PumpSwap relevés sur la blockchain le 14/10/2026 (token / WSOL).
+REAL_BUY = ("Z/RSHyz1d3cKqs9qAAAAALbp5tcgAgAAsmhVQAAAAAAAAAAAAAAAALJoVUAAAAAAX+79AMCzAAAy0UapEAAAALJoVUAAAAAAFAAAAAAAAABajCAA"
+            "AAAAAAUAAAAAAAAAFyMIAAAAAADyqrI/AAAAAJgekj8AAAAAf8R6dAVarQSXgVsFZinYaF4gnNXsc8XzbK+2oKV0EhHQilODgYCnW1UDK/Cup4N9"
+            "XBNCscLgnMuEVy7L1WC05Av2djVK8hXl7KnioM4pqSV0y7vkoEoZ1rva1xzWqIR8q6rXBgM6U7vhB+XLDeHtyV1fV6rYKkX9wmj1/OcWMLgAAAAA"
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYzKBwKDyjea6TUnIZSjJ"
+            "HS4vAgrcQ4tipXDv4teC0rNfAAAAAAAAAKmamgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZbbILLQBAAAVAAAAYnV5X2V4"
+            "YWN0X3F1b3RlX2luX3YyAAAAAAAAAAAAAAAAAAAAAIgTAAAAAAAAixEEAAAAAAAyYSsQBAAAAAAAAAAAAAAAAZbYyiO+igMAXwAAAAAAAACpmpoA"
+            "AAAAANlOWQgAAAAA")
+REAL_SELL = ("Pi83CqUD3CoKqs9qAAAAAMy/87pDAAAA2BoKCwAAAAAe8PnVoAAAAAAAAAAAAAAAIcw8N5uOAAA7iPJMFgAAANwmfAwAAAAAFAAAAAAAAABvZAYA"
+             "AAAAAAUAAAAAAAAAHJkBAAAAAABtwnUMAAAAAEbMVQwAAAAAMy4WuwIyXOAJR1Rj0wHjSGm3VIaKaZGyex3CtN1Gshp6QcW+MdtYtJcc6e/WPsk8"
+             "+j6y1Q8tTXg/hye3Sg0DCrKY5pmKhNNwdsvvAi1XA3s85CGM1MKQduYjjNv2ER98V+CnndPfygdxcIvC+G0niZv47rhyG39btW84aUWbSC1KwvjQ"
+             "3Vy8l+MonBl8tQYqVPPZVrnOblEV+WVnqlyz5nfZFZVfiIBzHOtKdaDMlsF0+kCVxOHZlnrPxChFrmeuyLeVY4g8HzdhjyMOwULv583s/xoFggnu"
+             "/bissqxwNbxfAAAAAAAAAAtdHgAAAAAAAAAAAAAAAAAAAAAAAAAAAIgTAAAAAAAAjswAAAAAAABydwsJBAAAAAAAAAAAAAAAAV08afcbdwMAAAAA"
+             "AAAAAAAAAAAAAAAAADOgLA4AAAAA")
+
+
+def test_pumpswap_real_events_sol_amount():
+    # le montant SOL est quote_amount_in / out (u64[6]), pas les frais LP en points de base (u64[7] = 20)
+    b, = events_from_amm_logs([f"Program data: {REAL_BUY}"])
+    s, = events_from_amm_logs([f"Program data: {REAL_SELL}"])
+    assert b["is_buy"] and not s["is_buy"]
+    assert b["sol"] == pytest.approx(1.079339186)
+    assert s["sol"] == pytest.approx(0.209463004)        # le vendeur a bien reçu ~0,207 SOL (après frais)
+    assert b["tokens"] == pytest.approx(2340084.443574)
+    assert b["price"] == pytest.approx((71.559467314 + 1.079339186) / (197637231.734367 - 2340084.443574))
+    assert s["price"] == pytest.approx((95.780243515 - 0.209463004) / (156797297.806369 + 290899.345356))
+
 def test_metadata_features():
     f = meta_features({"twitter": "https://x.com/abc/status/1", "telegram": "", "website": "https://x.com/abc",
                        "description": "un vrai projet"})

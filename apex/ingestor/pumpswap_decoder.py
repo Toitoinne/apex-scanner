@@ -2,7 +2,8 @@
 
 BuyEvent / SellEvent : timestamp i64, puis 13 u64, puis pool (Pubkey), user (Pubkey), …
   u64[0] = quantité de tokens (achetée ou vendue), u64[4] = réserve tokens du pool,
-  u64[5] = réserve SOL du pool (avant le trade), u64[7] = SOL payés / reçus.
+  u64[5] = réserve SOL du pool (avant le trade), u64[6] = SOL payés / reçus (quote_amount_in / out),
+  u64[7] = frais LP en points de base (20) — PAS un montant (lu par erreur jusqu'au 14/10 : 2e-8 SOL par trade).
 Prix après trade = réserve SOL / réserve tokens, ajustées du trade. Tokens à 6 décimales, SOL à 9.
 """
 from __future__ import annotations
@@ -36,7 +37,7 @@ def decode_amm_event(data_b64: str) -> dict | None:
     u = struct.unpack_from("<13Q", b, 8)
     is_buy = raw[:8] == DISC_BUY
     tokens = u[0] / 1e6
-    sol = u[7] / 1e9
+    sol = u[6] / 1e9
     base = u[4] / 1e6
     quote = u[5] / 1e9
     base_after = base - tokens if is_buy else base + tokens
@@ -62,7 +63,7 @@ def events_from_amm_logs(logs: list[str]) -> list[dict]:
 
 def encode_for_test(is_buy: bool, ts: int, tokens_raw: int, pool_base_raw: int, pool_quote_raw: int,
                     sol_raw: int, pool: str, user: str) -> str:
-    u = [tokens_raw, 0, 0, 0, pool_base_raw, pool_quote_raw, 0, sol_raw, 0, 0, 0, 0, 0]
+    u = [tokens_raw, 0, 0, 0, pool_base_raw, pool_quote_raw, sol_raw, 20, 0, 0, 0, 0, 0]
     body = ((DISC_BUY if is_buy else DISC_SELL) + struct.pack("<q", ts) + struct.pack("<13Q", *u)
             + base58.b58decode(pool) + base58.b58decode(user) + bytes(64))
     return base64.b64encode(body).decode()
