@@ -225,6 +225,9 @@ bandit:
     x10: {horizon: X10_24H, thresholds: [0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12]}
     # gain attendu (choix de stratégie token par token) : utilisé seulement quand le modèle a fait ses preuves
     ev:  {thresholds: [0.0, 0.02, 0.05, 0.10, 0.20]}
+  # note « gagnant probable » (rang 0–1 de la probabilité de trade gagnant après frais, voir apex/learning/ev.py) :
+  # utilisée seule (exclusive) une fois prouvée — top 1 % gagnant sur des tokens jamais vus, 2 validations de suite
+  win: {policy: SUIVEUR15_DES_X1, thresholds: [0.95, 0.98, 0.99, 0.995], exclusive: true, proof_top: 0.01, proof_min_n: 50}
   policies: all                  # toutes les stratégies de exits (config + panel)
   decision_points: ["10", "15", "30", "60", "120", "300", "600", "migration"]
   resample_every_s: 1800
@@ -278,7 +281,7 @@ claude:
 
 # Gain attendu par stratégie (apex/learning/ev.py) : réentraîné et validé toutes les 6 h sur des tokens
 # jamais vus ; ne prend la main que s'il bat la meilleure stratégie fixe de 1 point, 2 fois de suite
-ev: {hours: 48, min_rows: 3000, clip: [-1.0, 3.0], margin: 0.01, retrain_every_s: 21600}
+ev: {hours: 96, min_rows: 3000, clip: [-1.0, 3.0], margin: 0.01, retrain_every_s: 21600}
 
 # TERRAIN EN OBSERVATION : décisions d'étude après la migration et sur les 2es vagues. Aucune alerte, pas
 # d'apprentissage des modèles actuels : les 48 stratégies de sortie y sont simulées pour mesurer s'il y a de

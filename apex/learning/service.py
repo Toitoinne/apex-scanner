@@ -204,18 +204,25 @@ class LearnerService:
         history: list[dict] = (await self.bus.get_json("apex:ev:history", []) or [])[-6:]
         while True:
             try:
-                rows = await EV.load_rows(self.db, c.get("ev.hours", 48), c.get("bandit.min_buyers_to_alert", 10))
-                pols = sorted({k for _, p, _ in rows for k in p})
-                if len(rows) >= c.get("ev.min_rows", 3000):
-                    models = await asyncio.to_thread(EV.train, rows, pols, tuple(c.get("ev.clip", [-1.0, 3.0])),
-                                                     c.get("ev.min_rows", 3000))
+                data = await EV.load_data(self.db, c.get("ev.hours", 48), c.get("bandit.min_buyers_to_alert", 10))
+                if len(data) >= c.get("ev.min_rows", 3000):
+                    wcfg = c.get("bandit.win") or {}
+                    models = await asyncio.to_thread(
+                        EV.train, data, None, tuple(c.get("ev.clip", [-1.0, 3.0])), c.get("ev.min_rows", 3000),
+                        150, 0.2, wcfg.get("policy", "SUIVEUR15_DES_X1"))
+                    del data
                     history = (history + [models.stats])[-6:]
                     active = EV.should_activate(history, c.get("ev.margin", 0.01))
+                    win_on = models.win_booster is not None and EV.should_activate_win(
+                        history, str(wcfg.get("proof_top", 0.01)), wcfg.get("proof_min_n", 50))
                     async with self._lock:
                         self.learner.set_ev(models if active else None)
-                    msg = EV.summary(models.stats) + (" — ACTIVÉ" if active else " — en observation")
+                        self.learner.set_win(models if win_on else None)
+                    msg = (EV.summary(models.stats) + (" — ACTIVÉ" if active else " — en observation")
+                           + (" ; alertes « gagnant probable » ACTIVES" if win_on else ""))
                     await self.bus.set_json("apex:ev:history", history)
-                    await self.bus.set_json("apex:ev:stats", {**models.stats, "actif": active, "resume": msg, "ts": time.time()})
+                    await self.bus.set_json("apex:ev:stats", {**models.stats, "actif": active, "win_actif": win_on,
+                                                              "resume": msg, "ts": time.time()})
                     await self.db.log_event("info", "ev", msg, {k: v for k, v in models.stats.items()})
             except Exception:  # noqa: BLE001
                 log.exception("gain attendu par stratégie")

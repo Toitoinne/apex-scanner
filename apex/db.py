@@ -50,6 +50,19 @@ class DB:
                 await conn.execute("SET LOCAL max_parallel_workers_per_gather = 0")
                 return await conn.fetch(q, *args)
 
+    async def iter_serial(self, q: str, *args: Any, chunk: int = 2000):
+        """Comme fetch_serial, mais par paquets (curseur) : une requête de plusieurs centaines de Mo n'est jamais
+        entièrement chargée en mémoire."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL max_parallel_workers_per_gather = 0")
+                cur = await conn.cursor(q, *args)
+                while True:
+                    rows = await cur.fetch(chunk)
+                    if not rows:
+                        break
+                    yield rows
+
     async def fetchrow(self, q: str, *args: Any) -> asyncpg.Record | None:
         async with self.pool.acquire() as conn:
             return await conn.fetchrow(q, *args)

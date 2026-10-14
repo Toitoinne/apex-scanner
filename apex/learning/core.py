@@ -59,6 +59,7 @@ class Learner:
         self.ensembles = {h: HorizonEnsemble(h, c["models"], c["calibration"]["method"]) for h in self.horizons}
         self.evolved: dict[str, dict] = {}
         self.ev = None                  # modèles « gain attendu par stratégie » ACTIFS (sinon None : pas de choix AUTO)
+        self.win = None                 # note « gagnant probable » ACTIVE (sinon None) — voir ev.py
         self.bandit = self._new_bandit()
         self.short = [h for h in self.horizons if c["labels"][h]["horizon_s"] <= 3600]
         self.long = [h for h in self.horizons if h not in self.short]
@@ -86,6 +87,14 @@ class Learner:
         scores = {k: v["thresholds"] for k, v in b.get("scores", {"x2": {"thresholds": b["thresholds"]}}).items()
                   if k != "ev" or getattr(self, "ev", None) is not None}
         allp = build_panel(self.cfg.data.get("exits", {}), getattr(self, "evolved", {}))
+        win = getattr(self, "win", None)
+        if win is not None and b.get("win", {}).get("exclusive", True):
+            # note « gagnant probable » prouvée : choix resserré (quelques dizaines de combinaisons au lieu de
+            # milliers — avec trop de choix, le bandit retenait toujours une combinaison chanceuse)
+            pol = win.win_policy if win.win_policy in allp else next(iter(allp))
+            return AlertBandit(scores_cfg={"win": b["win"]["thresholds"]}, points=[str(p) for p in b["decision_points"]],
+                               policies=[pol], alerts_min=b["alerts_per_day"]["min"],
+                               alerts_max=b["alerts_per_day"]["max"], discount=b["discount"])
         policies = b.get("policies") or ["TP2_SL50"]
         if policies == "all":
             policies = list(allp)
@@ -140,6 +149,16 @@ class Learner:
         if self.ev is not None:
             auto_policy, ev = self.ev.best(x) if eligible else (None, -1.0)
             scores["ev"] = ev
+        win = getattr(self, "win", None)
+        if win is not None:
+            raw = win.win_raw(x) if eligible else None
+            if raw is None:
+                scores["win"] = 0.0
+            else:
+                if getattr(self, "win_ranker", None) is None:
+                    from .ev import WinRanker
+                    self.win_ranker = WinRanker(self.cfg.get("bandit.win.live_window", 20000))
+                scores["win"] = self.win_ranker.rank(raw, win.win_ref)
         # labels 6 h / 24 h : toutes les décisions alertables + un échantillon fixe des autres (288 000 entrées,
         # 1,3 Go le 12/10, dont ~86 % de décisions non alertables)
         if eligible or keep_long(d.decision_id, self.cfg.get("models.long_store_other_rate", 0.25)):
@@ -350,6 +369,19 @@ class Learner:
         fresh = self._new_bandit()
         self.bandit.sync_arms(fresh.scores_cfg, fresh.points, fresh.policies)
 
+    def set_win(self, models: Any) -> None:
+        """Active (ou coupe, models=None) la note « gagnant probable » pour les alertes."""
+        if models is getattr(self, "win", None):
+            return
+        was = getattr(self, "win", None) is not None
+        self.win = models
+        self.win_ranker = None                        # nouveau modèle : nouvelle échelle de notes
+        if was != (models is not None):
+            self.bandit = self._new_bandit()          # autre espace de choix : on repart d'un bandit neuf
+        elif models is not None:
+            fresh = self._new_bandit()
+            self.bandit.sync_arms(fresh.scores_cfg, fresh.points, fresh.policies)
+
     def set_evolved(self, evolved: dict[str, dict]) -> None:
         """Nouvelles variantes de stratégies de sortie : bras du bandit ajoutés / retirés."""
         if evolved == self.evolved:
@@ -541,6 +573,7 @@ class Learner:
         self.bandit = st["bandit"]
         self.evolved = getattr(self, "evolved", {}) or {}
         self.ev = getattr(self, "ev", None)
+        self.win = getattr(self, "win", None)
         if not hasattr(self.bandit, "scores_cfg"):
             self.bandit = self._new_bandit()      # ancien format (seuil seul) : nouveau bandit
         else:

@@ -45,6 +45,9 @@ def fmt_alert(a: dict) -> str:
         f"🚀 <b>Alerte : {e(a.get('name'))}</b> (${e(a.get('symbol'))})\n"
         f"Le bot pense que ce token peut monter. <i>Simulation : aucun achat réel.</i>\n\n"
         f"📊 Chances estimées : <b>x2 en 1 h : {sc.get('x2', a['p']):.0%}</b> · x10 en 24 h : {sc.get('x10', 0):.1%}\n"
+        + (f"🏅 Trade « gagnant probable » : dans le top {max(0.1, (1 - sc['win']) * 100):.1f} % des tokens les plus "
+           f"susceptibles de finir gagnants après frais\n".replace(".", ",") if sc.get("win") else "")
+        +
         f"⏱ Repéré {when} · valeur totale : {mc_txt}\n"
         + (f"💡 Pourquoi : {e(' ; '.join(why))}\n" if why else "")
         + (f"⚠️ Vigilance : {e(', '.join(flags))}\n" if flags else "")
