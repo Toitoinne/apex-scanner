@@ -71,6 +71,7 @@ def _trade(t, price, buy=True, trader="w"):
 
 def test_engine_outcome_per_policy_and_live_position_signals():
     eng = _engine()
+    eng.sell_latency = eng.buy_latency = 0.0        # logique des signaux (le délai réaliste a son propre test)
     eng.on_event(TokenCreated(mint="M", name="m", symbol="M", uri="", creator="dev", bonding_curve="", slot=0,
                               ts=0.0, signature="c"))
     p0 = 30 / 1_073_000_000

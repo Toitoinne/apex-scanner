@@ -85,6 +85,8 @@ class LabelerEngine:
         self.policies = {n: Policy.from_cfg(n, c) for n, c in build_panel(ex).items()}
         self.active_policies = set(self.policies)       # stratégies simulées sur les nouvelles décisions
         self.sale_cost = ex.get("sale_cost", 0.0)
+        self.sell_latency = ex.get("sell_latency_s", 0.0)     # exécution réaliste des ventes simulées
+        self.buy_latency = ex.get("buy_latency_s", 0.0)       # … et des achats
         self.min_buyers = cfg.get("bandit", {}).get("min_buyers_to_alert", 0)
         self.idle_finalize_s = ex.get("idle_finalize_s", 1800)
         self._last_idle_sweep = 0.0
@@ -252,7 +254,8 @@ class LabelerEngine:
         # choisir la stratégie) ; les décisions reprises depuis la base (features vides) le sont déjà
         alertable = not d.features or (not d.blocked and d.features.get("unique_buyers", 0) >= self.min_buyers)
         if self.policies and alertable:
-            tr.sims[d.decision_id] = {n: PolicyState(n, d.entry_price, d.ts, self.exit_fee, sale_cost=self.sale_cost)
+            tr.sims[d.decision_id] = {n: PolicyState(n, d.entry_price, d.ts, self.exit_fee, sale_cost=self.sale_cost,
+                                                     latency_s=self.sell_latency, entry_latency_s=self.buy_latency)
                                       for n in self.active_policies}
             heapq.heappush(self.heap, (d.ts + self.outcome_horizon, d.decision_id, OUT))
             tr.pending += 1
@@ -267,7 +270,9 @@ class LabelerEngine:
         if not entry:
             return
         self.positions[did] = Position(did, alert["mint"], pol, PolicyState(pol, entry, alert["ts"], self.exit_fee,
-                                                                            sale_cost=self.sale_cost),
+                                                                            sale_cost=self.sale_cost,
+                                                                            latency_s=self.sell_latency,
+                                                                            entry_latency_s=self.buy_latency),
                                        alert.get("symbol") or "")
 
     def _finalize(self, did: str, now: float) -> None:

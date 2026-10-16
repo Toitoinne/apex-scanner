@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
@@ -73,6 +73,16 @@ class PolicyState:
     last_t: float = 0.0
     sale_cost: float = 0.0            # coût fixe par vente (frais de réseau), en fraction de la mise initiale
     time_checked: bool = False
+    # EXÉCUTION RÉALISTE (16/10) : un ordre réel met quelques secondes à passer. Sans délai, l'entraînement vendait
+    # au prix du signal pendant les ventes en cascade (SQUEEZE : +0,8 % simulé, −59 % au simulateur d'ordres).
+    latency_s: float = 0.0            # vente exécutée au 1er prix vu après ce délai
+    entry_latency_s: float = 0.0      # achat exécuté au 1er prix vu après ce délai
+    entered: bool = True
+    pending: list = field(default_factory=list)      # ventes en cours : [t_exécution, fraction, type, raison]
+
+    def __post_init__(self) -> None:
+        if self.entry_latency_s > 0 and self.entered and self.last_t == 0.0:
+            self.entered = False
 
     def pnl(self) -> float:
         """PnL réalisé + latent (marqué au dernier prix), en fraction de la mise."""
@@ -87,47 +97,80 @@ class PolicyState:
             self.remaining = 0.0
             self.closed = True
 
+    def available(self) -> float:
+        """Part de la position pas encore vendue NI en cours de vente."""
+        return max(0.0, self.remaining - sum(x[1] for x in self.pending))
+
     def on_price(self, p: Policy, t: float, price: float, danger: str | None = None,
                  hold_p: float | None = None) -> list[Action]:
         if self.closed or price <= 0 or self.entry <= 0:
             return []
         out: list[Action] = []
         self.last_price, self.last_t = price, t
+        if not self.entered:
+            if t < self.t0 + self.entry_latency_s:
+                return []                      # l'ordre d'achat n'est pas encore passé
+            self.entry, self.entered, self.peak = price, True, price
+            self.t0 = t
         self.peak = max(self.peak, price)
         mult = price / self.entry
+        # ventes décidées plus tôt : exécutées au 1er prix vu une fois le délai écoulé
+        if self.pending:
+            waiting = []
+            for t_exec, frac, kind, reason in self.pending:
+                if t >= t_exec:
+                    self._sell(frac, price)
+                    out.append(Action(kind, t, price, frac, mult, self.pnl(), self.closed, reason))
+                else:
+                    waiting.append([t_exec, frac, kind, reason])
+            self.pending = waiting
+            if self.closed:
+                return out
+        avail = self.available()
+        if avail <= 1e-9:
+            return out                         # tout est déjà en cours de vente
 
         def act(kind: str, frac: float, reason: str = "") -> None:
-            self._sell(frac, price)
-            out.append(Action(kind, t, price, frac, mult, self.pnl(), self.closed, reason))
+            nonlocal avail
+            frac = min(frac, avail)
+            if frac <= 1e-12:
+                return
+            if self.latency_s > 0:
+                self.pending.append([t + self.latency_s, frac, kind, reason])
+                avail -= frac
+            else:
+                self._sell(frac, price)
+                avail = self.available()
+                out.append(Action(kind, t, price, frac, mult, self.pnl(), self.closed, reason))
 
         if danger and p.danger_exit:
-            act("DANGER", self.remaining, danger)
+            act("DANGER", avail, danger)
             return out
         if t - self.t0 >= p.time_limit_s:
-            act("TEMPS", self.remaining)
+            act("TEMPS", avail)
             return out
         while self.tp_idx < len(p.take_profits) and mult >= p.take_profits[self.tp_idx][0]:
             act("PALIER", p.take_profits[self.tp_idx][1], f"x{p.take_profits[self.tp_idx][0]:g}")
             self.tp_idx += 1
             self.trailing = self.trailing or p.trail is not None
-            if self.closed:
+            if avail <= 1e-9:
                 return out
         if p.trail is not None and self.peak / self.entry >= p.trail_activate:
             self.trailing = True
         if self.trailing and p.trail is not None:
             if price <= self.peak * (1 - p.trail):
-                act("STOP_SUIVEUR", self.remaining, f"−{p.trail:.0%} depuis x{self.peak / self.entry:.2f}")
+                act("STOP_SUIVEUR", avail, f"−{p.trail:.0%} depuis x{self.peak / self.entry:.2f}")
         elif p.breakeven_at and self.peak / self.entry >= p.breakeven_at and mult <= 1.0:
-            act("STOP", self.remaining, "retour au prix d'entrée")
+            act("STOP", avail, "retour au prix d'entrée")
         elif mult <= 1 - p.stop_loss:
-            act("STOP", self.remaining)
-        if (not self.closed and p.time_stop_s and not self.time_checked and t - self.t0 >= p.time_stop_s):
+            act("STOP", avail)
+        if (avail > 1e-9 and p.time_stop_s and not self.time_checked and t - self.t0 >= p.time_stop_s):
             self.time_checked = True
             if self.tp_idx == 0 and mult < 1 + p.time_stop_mult:
-                act("TEMPS", self.remaining, f"moins de +{p.time_stop_mult:.0%} après {p.time_stop_s / 60:g} min")
-        if (not self.closed and p.learned_exit and hold_p is not None and t - self.t0 >= p.min_hold_s
+                act("TEMPS", avail, f"moins de +{p.time_stop_mult:.0%} après {p.time_stop_s / 60:g} min")
+        if (avail > 1e-9 and p.learned_exit and hold_p is not None and t - self.t0 >= p.min_hold_s
                 and hold_p < p.hold_threshold):
-            act("APPRIS", self.remaining, f"chances de nouvelle hausse {hold_p:.0%}")
+            act("APPRIS", avail, f"chances de nouvelle hausse {hold_p:.0%}")
         return out
 
     def close_at_market(self, p: Policy, t: float) -> list[Action]:
@@ -135,6 +178,9 @@ class PolicyState:
         if self.closed:
             return []
         price = self.last_price or self.entry
+        if not self.entered:                   # achat jamais exécuté (plus aucun échange) : au dernier prix
+            self.entry, self.entered = price, True
+        self.pending = []
         frac = self.remaining
         self._sell(frac, price)
         return [Action("TEMPS", t, price, frac, price / self.entry, self.pnl(), True, "fin de suivi")]

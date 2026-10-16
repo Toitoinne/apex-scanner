@@ -204,13 +204,19 @@ class LearnerService:
         history: list[dict] = (await self.bus.get_json("apex:ev:history", []) or [])[-6:]
         while True:
             try:
-                data = await EV.load_data(self.db, c.get("ev.hours", 48), c.get("bandit.min_buyers_to_alert", 10))
+                # seuls les résultats simulés avec exécution réaliste (16/10) servent : avant, les ventes étaient
+                # instantanées et les gains surestimés ; les validations antérieures ne comptent plus
+                since = float(c.get("exits.realistic_since", 0) or 0)
+                history = [h for h in history if h.get("ts", 0) >= since]
+                hours = int(min(c.get("ev.hours", 48), max(1, (time.time() - since) // 3600)))
+                data = await EV.load_data(self.db, hours, c.get("bandit.min_buyers_to_alert", 10))
                 if len(data) >= c.get("ev.min_rows", 3000):
                     wcfg = c.get("bandit.win") or {}
                     models = await asyncio.to_thread(
                         EV.train, data, None, tuple(c.get("ev.clip", [-1.0, 3.0])), c.get("ev.min_rows", 3000),
                         150, 0.2, wcfg.get("policy", "SUIVEUR15_DES_X1"))
                     del data
+                    models.stats["ts"] = time.time()
                     history = (history + [models.stats])[-6:]
                     active = EV.should_activate(history, c.get("ev.margin", 0.01))
                     win_on = models.win_booster is not None and EV.should_activate_win(

@@ -710,7 +710,10 @@ class Supervisor:
                 + "\nLes résultats d'entraînement concernés sont peut-être faux. Le suivi Claude Code va regarder.")
 
     async def exit_board(self) -> None:
-        board = await EB.build(self.db, self.cfg, 48, await self.evolved())
+        # résultats avec exécution réaliste seulement (16/10) : la fenêtre grandit jusqu'à 48 h
+        since = float(self.cfg.get("exits.realistic_since", 0) or 0)
+        hours = max(1, min(48, int((time.time() - since) / 3600)))
+        board = await EB.build(self.db, self.cfg, hours, await self.evolved())
         await self.bus.set_json("apex:exits:board", board)
         await self.evolve_exits(board)
 

@@ -164,10 +164,12 @@ class LabelerService:
                     "multiple": round(s["multiple"], 4), "reason": s.get("reason", "")}
             await self.db.execute(
                 """UPDATE paper_positions SET state=$2, fills = fills || $3::jsonb, pnl=$4, pnl_sol=$4 * notional_sol,
-                   max_multiple=$5, status=$6, closed_at = CASE WHEN $6='closed' THEN now() ELSE closed_at END
+                   max_multiple=$5, status=$6, closed_at = CASE WHEN $6='closed' THEN now() ELSE closed_at END,
+                   entry_price = COALESCE($7, entry_price)
                    WHERE decision_id=$1 AND status <> 'closed'""",
                 s["decision_id"], st.to_dict() if st else {}, [fill], s["pnl_after"],
-                (st.peak / st.entry) if st and st.entry else None, "closed" if s["closed"] else "open")
+                (st.peak / st.entry) if st and st.entry else None, "closed" if s["closed"] else "open",
+                st.entry if st and st.entry else None)       # prix d'achat réel (exécuté après le délai)
             step_done(1)
         if done < 2:
             await self.bus.publish(B.SIGNALS, s)                 # → système d'ordres

@@ -77,6 +77,7 @@ def test_claude_credit_errors_are_detected():
 
 def test_danger_detected_on_pumpswap_trades_after_migration():
     eng = LabelerEngine(Config.load().data)
+    eng.sell_latency = eng.buy_latency = 0.0
     eng.on_event(TokenCreated(mint="M", name="m", symbol="M", uri="", creator="dev", bonding_curve="", slot=0,
                               ts=0.0, signature="c"))
     p = 4e-7

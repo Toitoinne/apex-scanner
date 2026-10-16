@@ -96,6 +96,11 @@ exits:
   # variantes qui échouent ; jusqu'à 12 variantes en test en plus des stratégies de base (jamais retirées)
   evolution: {enabled: true, every_s: 43200, cap: 12}
   sale_cost: 0.005              # frais de réseau par vente (0,0005 SOL) rapportés à une mise de 0,1 SOL
+  # EXÉCUTION RÉALISTE (16/10) : un ordre met ~3 s à passer (mesuré sur le simulateur d'ordres). Sans ce délai,
+  # l'entraînement vendait au prix du signal pendant les ventes en cascade et surestimait tous les résultats.
+  sell_latency_s: 3.0
+  buy_latency_s: 3.0
+  realistic_since: 1792145000     # 16/10 vers 12 h (Paris) : les résultats plus anciens (ventes instantanées) sont ignorés
   idle_finalize_s: 1800         # token sans échange depuis 30 min : simulations soldées au dernier prix
   # modèle de sortie : « le prix touchera-t-il +30 % avant −20 % dans les 10 min ? », appris en continu
   learned: {up: 1.3, down: 0.8, horizon_s: 600, every_s: 10, min_samples: 2000}
