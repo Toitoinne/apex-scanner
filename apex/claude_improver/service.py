@@ -189,8 +189,10 @@ class Improver:
         return (json.loads(text) if text else None), usage
 
     async def sample_contexts(self, n: int = 25) -> list[dict]:
-        """Reconstruit de vrais ctx à partir des trades récents (rétention 3 jours)."""
-        decs = await self.db.fetch(
+        """Reconstruit de vrais ctx à partir des trades récents (rétention 3 jours). Tirage sur 24 h de décisions
+        sans travailleurs parallèles (fetch_serial) : en parallèle, PostgreSQL saturait /dev/shm et la proposition
+        restait bloquée « received » (« No space left on device »)."""
+        decs = await self.db.fetch_serial(
             """SELECT d.mint, d.ts, t.name, t.symbol, t.creator, t.created_at, t.created_slot FROM decisions d
                JOIN tokens t USING (mint) WHERE d.ts > now() - interval '24 hours' ORDER BY random() LIMIT $1""", n)
         out = []

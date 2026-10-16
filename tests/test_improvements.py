@@ -88,3 +88,27 @@ def test_danger_detected_on_pumpswap_trades_after_migration():
     eng.on_event(PriceTick(mint="M", ts=30.0, price=p * 0.97, source="pumpswap", trader="dev", is_buy=False, sol=4, tokens=40e6))
     _, sigs = eng.drain()
     assert sigs and sigs[0]["kind"] == "DANGER" and sigs[0]["reason"] == "DEV_VEND"
+
+
+def test_claude_sample_contexts_without_parallel_workers():
+    """Le tirage des décisions pour tester les features de Claude passe par fetch_serial : en parallèle,
+    PostgreSQL saturait la mémoire partagée du conteneur et la proposition restait bloquée."""
+    import asyncio
+
+    from apex.claude_improver.service import Improver
+
+    class FakeDB:
+        def __init__(self):
+            self.serial = []
+
+        async def fetch_serial(self, q, *a):
+            self.serial.append(a)
+            return []
+
+        async def fetch(self, q, *a):
+            raise AssertionError("requête parallèle interdite pour le tirage des décisions")
+
+    imp = object.__new__(Improver)
+    imp.db = FakeDB()
+    assert asyncio.run(imp.sample_contexts(7)) == []
+    assert imp.db.serial == [(7,)]
