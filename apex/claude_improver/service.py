@@ -124,6 +124,8 @@ class Improver:
 
     # ------------------------------------------------------------------
     async def _budget_ok(self) -> bool:
+        if self.c.get("paused"):
+            return False                 # API mise en pause par le propriétaire (claude.paused) : aucun appel
         n = await self.db.fetchval("SELECT count(*) FROM claude_proposals WHERE ts > now() - interval '24 hours'")
         return n < self.c["max_calls_per_day"] and time.time() - self._last_run > 1800
 
@@ -244,6 +246,10 @@ class Improver:
 
     async def health_check(self) -> dict:
         """Vérification légère (quelques tokens) que l'API Claude répond et que le crédit n'est pas épuisé."""
+        if self.c.get("paused"):
+            st = {"ok": True, "paused": True, "ts": time.time()}
+            await self.bus.set_json("apex:claude:status", st)
+            return st
         try:
             await self.client.messages.create(
                 model=self.c["model"], max_tokens=64, output_config={"effort": "low"},

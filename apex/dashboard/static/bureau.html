@@ -217,7 +217,8 @@ function rendre(d) {
       dern ? `Dernière alerte : <b>$${esc(dern.symbol || "?")}</b>, à ${new Date(dern.ts).toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit", timeZone:"Europe/Paris"})}.` : "Pas d'alerte depuis 24 h : rien d'assez prometteur.",
       "Je n'envoie une alerte que quand Max est vraiment convaincu. ✉️"],
     claude: [
-      cl.ok ? "Je suis joignable. Quand le bot bloque sur un type d'erreur, il me demande une idée." : "Je ne suis pas joignable en ce moment.",
+      cl.pause ? "🏖️ Je suis en pause : le crédit de l'API n'est pas rechargé (choix du patron). Le bot tourne très bien sans moi."
+        : cl.ok ? "Je suis joignable. Quand le bot bloque sur un type d'erreur, il me demande une idée." : "Je ne suis pas joignable en ce moment.",
       `<b>${nf(cl.idees_validees)}</b> de mes idées ont été gardées, sur ${nf(cl.idees)} testées. Les autres n'ont pas fait mieux.`,
       "Mon collègue Claude Code passe aussi 4 fois par jour faire une inspection complète. 🔧"],
   };

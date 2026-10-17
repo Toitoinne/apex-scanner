@@ -277,6 +277,7 @@ supervision:
   self_reference_after_h: 24     # sans backfill : courbes de référence = 12–24 h de live
 
 claude:
+  paused: true                   # 17/10 : crédit API épuisé, mis en pause par le propriétaire (aucun appel, aucune alerte)
   model: claude-opus-5-5
   effort: medium                 # défaut d'Opus 5.5 ; moins de tokens de sortie
   cycle_s: 43200                 # 1 appel planifié toutes les 12 h

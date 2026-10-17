@@ -232,7 +232,7 @@ async def bureau(_: None = Depends(auth)) -> dict:
         "cheffe": {"age_s": round(now - (sup.get("ts") or now)), "duree_s": sup.get("duration_s"),
                    "evenements": (sup.get("events") or [])[:3], "coherence_ok": co.get("ok"), "coherence": co.get("resume")},
         "facteur": {"alertes_jour": ln.get("alerts_today"), "dernieres": alerts},
-        "claude": {"ok": cl.get("ok"), "vu_s": round(now - cl["ts"]) if cl.get("ts") else None,
+        "claude": {"ok": cl.get("ok"), "pause": bool(cl.get("paused")), "vu_s": round(now - cl["ts"]) if cl.get("ts") else None,
                    "idees_validees": cfeat and cfeat["ok"], "idees": cfeat and cfeat["n"],
                    "derniere_idee": cfeat and cfeat["dernier"]},
         "fil": events,

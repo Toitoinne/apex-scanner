@@ -43,3 +43,23 @@ def test_bureau_api_with_partial_data():
 def test_bureau_page_exists():
     html = (A.STATIC / "bureau.html").read_text(encoding="utf-8")
     assert "/api/bureau" in html and "token" in html
+
+
+def test_claude_pause_makes_no_api_call():
+    import asyncio
+
+    from apex.claude_improver.service import Improver as ClaudeImprover
+
+    class Bus:
+        def __init__(self):
+            self.saved = {}
+
+        async def set_json(self, k, v):
+            self.saved[k] = v
+
+    imp = ClaudeImprover.__new__(ClaudeImprover)
+    imp.c, imp.bus = {"paused": True}, Bus()
+    imp.client = None                                   # tout appel à l'API planterait
+    st = asyncio.run(imp.health_check())
+    assert st["ok"] and st["paused"] and imp.bus.saved["apex:claude:status"]["paused"]
+    assert asyncio.run(imp._budget_ok()) is False
