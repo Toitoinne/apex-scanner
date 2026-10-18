@@ -39,8 +39,11 @@ CANDIDATES: dict[str, list[str]] = {
 }
 
 
-def candidates_for(state: str, causes: dict) -> list[str]:
+def candidates_for(state: str, causes: dict, claude_available: bool = True) -> list[str]:
     cands = list(CANDIDATES.get(state, []))
+    if not claude_available:
+        # API Claude en pause : ces actions ne feraient rien mais consommeraient le budget de corrections/heure
+        cands = [a for a in cands if a not in ("request_claude_features", "request_claude_targeted_feature")]
     if "revert_recent_correction" in cands and not causes.get("recent_corrections"):
         cands.remove("revert_recent_correction")
     if "disable_drifted_feature" in cands and not causes.get("features_changed") and not causes.get("drifted"):

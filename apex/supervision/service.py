@@ -531,7 +531,8 @@ class Supervisor:
             diag_id = await self.db.fetchval(
                 "INSERT INTO diagnoses (ts, state, curve, causes, confidence) VALUES (now(),$1,$2,$3,$4) RETURNING id",
                 d.state, d.curve, causes, conf)
-            cands = candidates_for(d.state, causes)
+            cands = candidates_for(d.state, causes,
+                                   claude_available=self.improver is not None and not self.cfg.get("claude.paused", False))
             # exclut les actions dont le composant est gelé ou occupé
             usable = []
             for a in cands:
