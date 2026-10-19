@@ -1,0 +1,14 @@
+node_modules/
+.next/
+out/
+public/dict/
+.env*.local
+.env
+next-env.d.ts
+*.tsbuildinfo
+test-results/
+playwright-report/
+AGENTS.md
+
+# Le .gitignore racine exclut data/ : on garde les données linguistiques de l’app
+!data/
