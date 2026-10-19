@@ -112,3 +112,19 @@ def test_claude_sample_contexts_without_parallel_workers():
     imp.db = FakeDB()
     assert asyncio.run(imp.sample_contexts(7)) == []
     assert imp.db.serial == [(7,)]
+
+
+def test_metadata_fetch_survives_invalid_url():
+    import asyncio
+
+    from apex.features.metadata import MetadataFetcher
+
+    async def run():
+        f = MetadataFetcher()
+        try:
+            return await f.fetch("https://bad.example:https://x.json"), f.stats
+        finally:
+            await f.client.aclose()
+
+    meta, stats = asyncio.run(run())
+    assert meta is None and stats["fail"] == 1

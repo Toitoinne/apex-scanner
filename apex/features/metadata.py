@@ -71,7 +71,9 @@ class MetadataFetcher:
                             self.stats["ok"] += 1
                             return {k: d.get(k) for k in ("twitter", "telegram", "website", "description", "image",
                                                           "showName", "createdOn")}
-                except (httpx.HTTPError, ValueError):
+                except (httpx.HTTPError, httpx.InvalidURL, ValueError):
+                    # InvalidURL n'hérite pas de HTTPError : une URI mal formée (« https://hote:https://… », port invalide)
+                    # faisait planter la tâche sans essayer les passerelles de secours
                     continue
             self.stats["fail"] += 1
             return None
