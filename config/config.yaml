@@ -69,7 +69,7 @@ labels:
   rug: {drop_from_peak: 0.90, window_s: 600}
 
 exits:
-  fee: 0.02                     # frais + slippage par vente (estimation prudente)
+  fee: 0.016                    # par vente : 1,25 % pump.fun (0,95 % protocole + 0,30 % créateur, mesuré on-chain le 19/10) + ~0,35 % de glissement
   policies:
     TP2_SL50:      {stop_loss: 0.5, take_profits: [[2.0, 1.0]], time_limit_s: 3600, danger_exit: false,
                     description: "tout vendre à x2, stop −50 %, 1 h max"}
@@ -95,12 +95,12 @@ exits:
   # ÉVOLUTION : toutes les 12 h, variantes des meilleures stratégies (réglages modifiés), retrait des
   # variantes qui échouent ; jusqu'à 12 variantes en test en plus des stratégies de base (jamais retirées)
   evolution: {enabled: true, every_s: 43200, cap: 12}
-  sale_cost: 0.005              # frais de réseau par vente (0,0005 SOL) rapportés à une mise de 0,1 SOL
+  sale_cost: 0.001              # frais de réseau par vente : ~0,00004 SOL mesurés (médiane), 0,0001 SOL retenus par prudence, pour une mise de 0,1 SOL
   # EXÉCUTION RÉALISTE (16/10) : un ordre met ~3 s à passer (mesuré sur le simulateur d'ordres). Sans ce délai,
   # l'entraînement vendait au prix du signal pendant les ventes en cascade et surestimait tous les résultats.
   sell_latency_s: 3.0
   buy_latency_s: 3.0
-  realistic_since: 1792145000     # 16/10 vers 12 h (Paris) : les résultats plus anciens (ventes instantanées) sont ignorés
+  realistic_since: 1792405603     # 19/10 : exécution réaliste ET frais réels (avant : frais surestimés d'~1 point)
   idle_finalize_s: 1800         # token sans échange depuis 30 min : simulations soldées au dernier prix
   # modèle de sortie : « le prix touchera-t-il +30 % avant −20 % dans les 10 min ? », appris en continu
   learned: {up: 1.3, down: 0.8, horizon_s: 600, every_s: 10, min_samples: 2000}
