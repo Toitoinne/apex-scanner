@@ -80,3 +80,52 @@ def test_loop_survives_hanging_tasks(monkeypatch):
     # malgré le cycle et l'audit bloqués, la boucle continue et tourne plusieurs fois
     assert done == ["board"]
     assert len(cycles) >= 2
+
+
+def test_cycle_records_step_durations():
+    """Le cycle dure ~45 s depuis le 11/10 : chaque étape est chronométrée pour trouver la lente."""
+    saved = {}
+
+    class Bus(FakeBus):
+        async def set_json(self, key, val):
+            saved[key] = val
+
+    class DB(FakeDB):
+        async def executemany(self, *a):
+            return None
+
+        async def log_event(self, *a):
+            return None
+
+    class Det:
+        async def detect(self, primary):
+            return []
+
+    sup = Supervisor.__new__(Supervisor)
+    sup.bus, sup.db, sup.detector, sup.primary = Bus(), DB(), Det(), "L15"
+
+    async def curves():
+        return {}
+
+    async def none():
+        return None
+
+    async def empty(*a):
+        return []
+
+    async def slow():
+        await asyncio.sleep(0.05)
+        return []
+
+    async def send(cmd):
+        return {"ok": True}
+    sup.record_curves, sup.self_reference = curves, none
+    sup.guardrails = sup.correct = empty
+    sup.learning_health = sup.trading_gate = sup.gc_shadows = lambda: empty()
+    sup.evaluate_corrections = slow
+    sup.send = send
+    summary = asyncio.run(sup.cycle())
+    steps = summary["steps_s"]
+    assert set(steps) >= {"record_curves", "detect", "evaluate_corrections", "correct", "snapshot"}
+    assert max(steps, key=steps.get) == "evaluate_corrections"
+    assert saved["apex:supervisor:last_cycle"]["steps_s"] == steps

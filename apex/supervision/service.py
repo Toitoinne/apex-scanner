@@ -614,28 +614,41 @@ class Supervisor:
     # ------------------------------------------------------------------
     async def cycle(self) -> dict:
         t0 = time.time()
-        snap = await self.record_curves()
-        await self.self_reference()
-        states = await self.detector.detect(self.primary)
-        await self.db.executemany(
+        steps: dict[str, float] = {}
+
+        async def timed(name: str, aw: Any) -> Any:
+            # durée de chaque étape : le cycle dure ~45 s depuis le 11/10 sans savoir laquelle est lente
+            t = time.time()
+            try:
+                return await aw
+            finally:
+                steps[name] = round(time.time() - t, 2)
+
+        snap = await timed("record_curves", self.record_curves())
+        await timed("self_reference", self.self_reference())
+        states = await timed("detect", self.detector.detect(self.primary))
+        await timed("learning_states", self.db.executemany(
             "INSERT INTO learning_states (ts, curve, state, slope, p_value, details) VALUES (now(),$1,$2,$3,$4,$5)",
-            [(d.curve, d.state, d.slope, d.p_value, d.details) for d in states])
-        events = await self.guardrails(states)
-        events += await self.learning_health()
-        events += await self.trading_gate()
-        events += await self.evaluate_corrections()
-        events += await self.gc_shadows()
-        events += await self.correct(states, snap)
+            [(d.curve, d.state, d.slope, d.p_value, d.details) for d in states]))
+        events = await timed("guardrails", self.guardrails(states))
+        events += await timed("learning_health", self.learning_health())
+        events += await timed("trading_gate", self.trading_gate())
+        events += await timed("evaluate_corrections", self.evaluate_corrections())
+        events += await timed("gc_shadows", self.gc_shadows())
+        events += await timed("correct", self.correct(states, snap))
         stable = not any(d.state in (REGRESSION, "REGRESSION_TYPE") for d in states)
-        res = await self.send({"op": "snapshot", "stable": stable, "label": "cycle"})
+        res = await timed("snapshot", self.send({"op": "snapshot", "stable": stable, "label": "cycle"}))
         dur = time.time() - t0
-        summary = {"ts": time.time(), "duration_s": round(dur, 2), "states": [d.__dict__ for d in states],
+        summary = {"ts": time.time(), "duration_s": round(dur, 2), "steps_s": steps,
+                   "states": [d.__dict__ for d in states],
                    "events": events, "snapshot": res, "stable": stable}
         await self.bus.set_json("apex:supervisor:last_cycle", summary)
         for e in events:
             await self.db.log_event("info", "supervision", e)
         if dur > 30:
-            log.warning("cycle d'auto-supervision trop long : %.1f s", dur)
+            slowest = sorted(steps.items(), key=lambda kv: -kv[1])[:3]
+            log.warning("cycle d'auto-supervision trop long : %.1f s (étapes les plus lentes : %s)", dur,
+                        ", ".join(f"{k} {v:.1f} s" for k, v in slowest))
         return summary
 
     async def run(self) -> None:
