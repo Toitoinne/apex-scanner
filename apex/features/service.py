@@ -27,6 +27,12 @@ GROUP = "features"
 SOL_MINT = "So11111111111111111111111111111111111111112"
 
 
+def pg_text(s: str | None) -> str | None:
+    """PostgreSQL refuse l'octet nul (0x00) dans un texte : un nom de token qui en
+    contient faisait planter le service en boucle (message jamais acquitté)."""
+    return s.replace("\x00", "") if s else s
+
+
 class FeatureService:
     def __init__(self, cfg: Config, bus: B.Bus, db: DB):
         self.cfg, self.bus, self.db = cfg, bus, db
@@ -208,10 +214,14 @@ class FeatureService:
             if isinstance(ev, TokenCreated):
                 B.spawn(self.on_created_authorities(ev))
                 B.spawn(self.fetch_meta(ev))
-                await self.db.execute(
-                    """INSERT INTO tokens (mint, chain, name, symbol, uri, creator, bonding_curve, created_at, created_slot)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (mint) DO NOTHING""",
-                    ev.mint, ev.chain, ev.name, ev.symbol, ev.uri, ev.creator, ev.bonding_curve, ts(ev.ts), ev.slot)
+                try:
+                    await self.db.execute(
+                        """INSERT INTO tokens (mint, chain, name, symbol, uri, creator, bonding_curve, created_at, created_slot)
+                           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (mint) DO NOTHING""",
+                        ev.mint, ev.chain, pg_text(ev.name), pg_text(ev.symbol), pg_text(ev.uri),
+                        ev.creator, ev.bonding_curve, ts(ev.ts), ev.slot)
+                except Exception:  # noqa: BLE001
+                    log.exception("token %s non enregistré", ev.mint)
             elif isinstance(ev, Migration):
                 await self.db.execute("UPDATE tokens SET migrated_at=$2 WHERE mint=$1", ev.mint, ts(ev.ts))
             if decs:
