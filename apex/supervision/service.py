@@ -521,12 +521,13 @@ class Supervisor:
         st = await self.learner_state()
         if not st:
             return ["état du learner indisponible : aucune correction"]
+        shared: dict = {}      # diagnostic commun calculé une seule fois par cycle
         abnormal = sorted([d for d in states if d.state in ABNORMAL], key=lambda d: SEVERITY.index(d.state) if d.state in SEVERITY else 99)
         for d in abnormal:
             if budget <= 0:
                 events.append("limite de corrections/heure atteinte (anti-emballement)")
                 break
-            causes, conf = await self.detector.diagnose(d, self.primary)
+            causes, conf = await self.detector.diagnose(d, self.primary, shared)
             causes.update(d.details)
             diag_id = await self.db.fetchval(
                 "INSERT INTO diagnoses (ts, state, curve, causes, confidence) VALUES (now(),$1,$2,$3,$4) RETURNING id",

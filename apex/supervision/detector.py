@@ -1,6 +1,7 @@
 """Boucle 2 — détection de l'état d'apprentissage (10.2) et diagnostic (10.3)."""
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import logging
 from dataclasses import dataclass, field
@@ -111,8 +112,22 @@ class Detector:
         return out
 
     # ------------------------------------------------------------------
-    async def diagnose(self, d: Detected, primary: str) -> tuple[dict, float]:
-        """Compare la période dégradée (6 h) à la période saine (6–30 h avant)."""
+    async def diagnose(self, d: Detected, primary: str, shared: dict | None = None) -> tuple[dict, float]:
+        """Compare la période dégradée (6 h) à la période saine (6–30 h avant).
+
+        `shared` : cache d'un cycle du superviseur. Dérive des features, types d'erreur, modèles et
+        marché ne dépendent pas de l'état diagnostiqué ; ces requêtes lourdes (~5 s) étaient refaites
+        pour chaque état anormal (cycle de 50–80 s, étape « correct » ~25 s). Calculées une fois."""
+        key = ("diag", primary)
+        if shared is not None and key in shared:
+            causes: dict[str, Any] = copy.deepcopy(shared[key])
+        else:
+            causes = await self._diagnose_common(primary)
+            if shared is not None:
+                shared[key] = copy.deepcopy(causes)
+        return await self._diagnose_finish(d, causes)
+
+    async def _diagnose_common(self, primary: str) -> dict[str, Any]:
         causes: dict[str, Any] = {}
         recent = await self.m.feature_samples("6 hours", "0 seconds", 3000)
         healthy = await self.m.feature_samples("30 hours", "6 hours", 3000)
@@ -142,6 +157,10 @@ class Detector:
                FROM market_context WHERE ts > now() - interval '30 hours'""")
         if mk:
             causes["market"] = {k: (float(mk[k]) if mk[k] is not None else None) for k in mk.keys()}
+        return causes
+
+    async def _diagnose_finish(self, d: Detected, causes: dict[str, Any]) -> tuple[dict, float]:
+        # relu à chaque état : les corrections lancées plus tôt dans le même cycle comptent (requête légère)
         recent_corr = await self.db.fetch(
             """SELECT id, action, component, ts FROM corrections WHERE ts > now() - interval '12 hours'
                AND status NOT IN ('rolled_back') ORDER BY ts DESC""")
