@@ -174,12 +174,31 @@ class LabelerService:
         if done < 2:
             await self.bus.publish(B.SIGNALS, s)                 # → système d'ordres
             step_done(2)
+        if s.get("kind") == "SYNCHRO":                       # remise en ordre interne : pas de message
+            step_done(3)
+            return
         reason = DANGER_LABELS.get(s.get("reason", ""), s.get("reason", ""))
         await self.bus.publish(B.NOTIFY, {"type": "sell_signal", **s, "reason_text": reason,
                                           "notional_sol": self.notional})
         step_done(3)
 
     # ------------------------------------------------------------------
+    async def stale_loop(self) -> None:
+        """Toutes les 10 min : positions ouvertes en base depuis plus de 25 h (limite de temps 24 h dépassée)
+        mais déjà soldées dans le moteur → clôturées en base ; le système d'ordres suit (synchronisation)."""
+        while True:
+            await asyncio.sleep(600)
+            try:
+                rows = await self.db.fetch(
+                    """SELECT decision_id, mint, symbol, policy, state FROM paper_positions
+                       WHERE status='open' AND opened_at < now() - interval '25 hours'""")
+                sigs = self.engine.stale_open([dict(r) for r in rows], time.time())
+                if sigs:
+                    log.warning("%d position(s) déjà soldée(s) mais ouverte(s) en base : clôture", len(sigs))
+                    self.engine.signals.extend(sigs)
+            except Exception:  # noqa: BLE001
+                log.exception("synchronisation des positions ouvertes")
+
     async def pricefeed_loop(self) -> None:
         """Prix PumpSwap des tokens migrés (suivi des labels longs, stratégies et positions)."""
         poll = self.cfg.get("pricefeed.poll_s", 20)
@@ -379,6 +398,7 @@ class LabelerService:
             B.resilient("tick", lambda _: self.tick_loop()),
             B.resilient("flush", lambda _: self.flush_trades()),
             B.resilient("pricefeed", lambda _: self.pricefeed_loop()),
+            B.resilient("stale", lambda _: self.stale_loop()),
         )
 
 

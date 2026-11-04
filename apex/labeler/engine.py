@@ -215,6 +215,31 @@ class LabelerEngine:
         self.positions[did] = Position(did, mint, policy, PolicyState.from_dict(state), symbol)
         return True
 
+    def stale_open(self, open_rows: list[dict], now: float) -> list[dict]:
+        """Positions encore OUVERTES en base mais déjà SOLDÉES dans le moteur (ex. soldées pendant le rejeu
+        d'un redémarrage, dont les signaux sont jetés, ou état soldé rechargé depuis la base) : la limite de
+        temps ne les voit plus (elle ignore les positions soldées), elles restaient ouvertes pour toujours
+        (vu le 04/11 : 2 positions ouvertes depuis plus de 26 h, paper ET simulateur d'ordres).
+        Retourne un signal de clôture « SYNCHRO » par position concernée (à la valeur du moteur)."""
+        out: list[dict] = []
+        for r in open_rows:
+            did = r["decision_id"]
+            if did not in self.positions and r.get("state"):
+                try:
+                    self.reload_position(did, r["mint"], r["policy"], r["state"], r.get("symbol") or "")
+                except Exception:  # noqa: BLE001 — état illisible : laissé tel quel
+                    continue
+            pos = self.positions.get(did)
+            if pos is None or not pos.state.closed:
+                continue                   # encore suivie : la limite de temps la soldera au prochain tour
+            st = pos.state
+            price = st.last_price or st.entry
+            out.append({"decision_id": did, "mint": pos.mint, "policy": pos.policy, "symbol": pos.symbol,
+                        "kind": "SYNCHRO", "t": now, "price": price, "fraction": 0.0,
+                        "multiple": (price / st.entry) if st.entry else 0.0, "pnl_after": st.pnl(),
+                        "closed": True, "reason": "position déjà soldée (synchronisation)"})
+        return out
+
     def _exit_signal(self, tr: Track, t: float, price: float) -> float | None:
         """Sortie apprise : seulement pour les tokens où une position (simulée ou réelle) est ouverte."""
         if not tr.sims and not any(p.mint == tr.created.mint and not p.state.closed for p in self.positions.values()):
