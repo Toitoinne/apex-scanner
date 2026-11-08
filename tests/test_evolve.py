@@ -95,3 +95,23 @@ def test_position_of_retired_strategy_is_closed_after_restart():
     assert abs(signals[0]["multiple"] - 0.5) < 1e-9 and eng.positions["d1"].state.closed
     eng.tick(2100.0)
     assert eng.drain()[1] == []                                                       # vendue une seule fois
+
+
+def test_no_clone_variants():
+    """08/11 : 5 variantes aux réglages identiques (réglages bloqués sur leurs bornes) occupaient la population."""
+    from apex.trading.evolve import settings_key
+    names = list(BASE)
+    parent = BASE[names[0]]
+    clone = {**parent, "description": "variante", "parent": names[0]}
+    other = {**parent, "stop_loss": 0.1, "description": "v1"}
+    ev0 = {"EVO1_1": dict(other), "EVO1_2": {**other, "description": "v2"}, "EVO1_3": clone}
+    board = [row("EVO1_2", 1, 0.2), row("EVO1_1", 2, 0.1)] + [row(n, i + 3, 0.0) for i, n in enumerate(names)]
+    ev, added, removed = evolve(board, BASE, ev0, gen=2, rng=random.Random(4))
+    assert "EVO1_3" in removed and "EVO1_1" in removed and "EVO1_2" in ev   # on garde la mieux classée
+    keys = [settings_key(c) for c in ev.values()] + [settings_key(c) for c in BASE.values()]
+    assert len(keys) == len(set(keys))
+    # un parent dont toutes les mutations butent sur les bornes ne produit pas de clone
+    stuck = {"S": {"stop_loss": 0.1, "time_limit_s": 600, "description": "bloquée"}}
+    ev2, added2, _ = evolve([row("S", 1, 0.1)], stuck, {}, gen=3, rng=random.Random(5))
+    keys2 = [settings_key(c) for c in ev2.values()] + [settings_key(stuck["S"])]
+    assert len(keys2) == len(set(keys2))

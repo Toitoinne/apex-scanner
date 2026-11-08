@@ -10,6 +10,7 @@ Chaque variante est simulée sur toutes les décisions alertables et jugée sur 
 """
 from __future__ import annotations
 
+import json
 import re
 
 import random
@@ -74,6 +75,15 @@ def mutate(cfg: dict, rng: random.Random, strength: float = 0.25) -> tuple[dict,
     return c, changes
 
 
+META = ("description", "base_desc", "changes", "parent")
+
+
+def settings_key(cfg: dict) -> str:
+    """Empreinte des RÉGLAGES d'une stratégie (sans description) : deux stratégies de même empreinte
+    se comportent exactement pareil sur chaque décision."""
+    return json.dumps({k: v for k, v in cfg.items() if k not in META}, sort_keys=True, default=str)
+
+
 def evolve(board: list[dict], base: dict[str, dict], evolved: dict[str, dict], gen: int, rng: random.Random,
            cap: int = 12, parents: int = 3, children: int = 2, min_n: int = 300) -> tuple[dict, list[str], list[str]]:
     """board : classement (rang, pol, n, mean, verdict…). Retourne (variantes, ajoutées, retirées)."""
@@ -86,12 +96,29 @@ def evolve(board: list[dict], base: dict[str, dict], evolved: dict[str, dict], g
         if r["pol"] in evolved and (r["verdict"] == "perd" and r["rang"] > parents or r["rang"] > max(half, parents)):
             evolved.pop(r["pol"])
             removed.append(r["pol"])
-    # 2. les meilleures donnent naissance à des variantes
+    # 1 bis. retirer les CLONES : une variante aux réglages identiques à une stratégie de base ou à une
+    # variante mieux classée (vu le 08/11 : 5 variantes identiques à −3,78 %, 3 autres à −3,73 %, car les
+    # réglages butent sur leurs bornes — stop −10 %, palier x1,1) n'apporte aucune information et prend une place
+    seen = {settings_key(c) for c in base.values()}
+    rank_of = {r["pol"]: r["rang"] for r in judged}
+    for n in sorted(evolved, key=lambda n: (rank_of.get(n, 10_000), n)):
+        key = settings_key(evolved[n])
+        if key in seen:
+            evolved.pop(n)
+            removed.append(n)
+        seen.add(key)
+    # 2. les meilleures donnent naissance à des variantes (jamais un clone d'une stratégie existante)
     allp = {**base, **evolved}
     added = []
     for r in [r for r in judged if r["pol"] in allp][:parents]:
         for k in range(children):
-            cfg, changes = mutate(allp[r["pol"]], rng)
+            for _ in range(10):
+                cfg, changes = mutate(allp[r["pol"]], rng)
+                if settings_key(cfg) not in seen:
+                    break
+            else:
+                continue                    # plus aucune variante nouvelle autour de ce parent
+            seen.add(settings_key(cfg))
             name = f"EVO{gen}_{len(added) + 1}"
             par = allp[r["pol"]]
             base = par.get("base_desc") or root_desc(par.get("description", r["pol"]))
