@@ -69,6 +69,11 @@ class Learner:
         self.cache: dict[str, DecisionCache] = {}
         self.mint_preds: dict[str, dict[str, float]] = {}
         self.alerted_mints: set[str] = set()
+        # GARDE-FOU « créateur en série » (09/11) : un créateur a relancé « SLNADO » 6 fois et « MAX » 2 fois en
+        # quelques heures ; le bot a alerté sur chaque relance (8 trades, −53 % au pire). Une seule alerte par
+        # créateur sur 24 h, et jamais sur un nom que ce créateur a déjà lancé et qui a été alerté.
+        self.alerted_creators: dict[str, float] = {}               # créateur -> instant de la dernière alerte
+        self.alerted_names: dict[str, float] = {}                  # "créateur|nom" -> instant de l'alerte
         self.alerts_day: tuple[int, int] = (0, 0)              # (jour, nombre)
         self.dynamic_rules: list[DynamicRule] = []
         self.paused = False
@@ -177,7 +182,8 @@ class Learner:
         # pas d'alerte sur un token sans activité réelle (illiquide, non tradable)
         warm = warm and d.features.get("unique_buyers", 0) >= self.cfg.get("bandit.min_buyers_to_alert", 10)
         warm = warm and self.bandit.ready(self.cfg.get("bandit.min_observed_s", 3600))
-        if warm and not d.blocked and not self.paused and d.mint not in self.alerted_mints and self.bandit.should_alert(d.point, scores):
+        if (warm and not d.blocked and not self.paused and d.mint not in self.alerted_mints
+                and self.creator_block(d) is None and self.bandit.should_alert(d.point, scores)):
             day, hour = int(d.ts // 86400), int(d.ts // 3600)
             n = self.alerts_day[1] if self.alerts_day[0] == day else 0
             nh = self.alerts_hour[1] if getattr(self, "alerts_hour", (0, 0))[0] == hour else 0
@@ -185,11 +191,46 @@ class Learner:
                 self.alerts_day = (day, n + 1)
                 self.alerts_hour = (hour, nh + 1)
                 self.alerted_mints.add(d.mint)
+                self.note_creator(d)
                 dc.alerted = True
                 self.long_store[d.decision_id]["alerted"] = True
                 alert = self._alert_payload(dc, p, scores)
         self._evict(d.ts)
         return rows, alert
+
+    @staticmethod
+    def _name_key(d: Any) -> str | None:
+        creator = (getattr(d, "meta", None) or {}).get("creator")
+        name = ((d.meta.get("symbol") or d.meta.get("name") or "") if creator else "").strip().lower()
+        return f"{creator}|{name}" if creator and name else None
+
+    def creator_block(self, d: Any) -> str | None:
+        """Raison du refus si ce token vient d'un créateur déjà alerté récemment, ou relance un nom déjà alerté."""
+        creator = (getattr(d, "meta", None) or {}).get("creator")
+        if not creator:
+            return None
+        cooldown = self.cfg.get("bandit.creator_cooldown_s", 86400)
+        if d.ts - getattr(self, "alerted_creators", {}).get(creator, -1e18) < cooldown:
+            return "créateur déjà alerté il y a moins de 24 h"
+        key = self._name_key(d)
+        if key and key in getattr(self, "alerted_names", {}):
+            return "relance d'un nom déjà alerté par le même créateur"
+        return None
+
+    def note_creator(self, d: Any) -> None:
+        creator = (getattr(d, "meta", None) or {}).get("creator")
+        if not creator:
+            return
+        if not hasattr(self, "alerted_creators"):
+            self.alerted_creators, self.alerted_names = {}, {}
+        self.alerted_creators[creator] = d.ts
+        key = self._name_key(d)
+        if key:
+            self.alerted_names[key] = d.ts
+        if len(self.alerted_names) > 5000 or len(self.alerted_creators) > 5000:     # mémoire bornée : 7 jours
+            for dct in (self.alerted_creators, self.alerted_names):
+                for k in [k for k, v in dct.items() if d.ts - v > 7 * 86400]:
+                    del dct[k]
 
     def _alert_payload(self, dc: DecisionCache, p: float, scores: dict[str, float]) -> dict:
         d = dc.d
@@ -558,6 +599,7 @@ class Learner:
             "dynamic_rules": self.dynamic_rules, "alerted_mints": self.alerted_mints, "alerts_day": self.alerts_day,
             "lgbm_version": self.lgbm_version, "counter": self.counter, "cache": self.cache, "mint_preds": self.mint_preds,
             "long_store": self.long_store,
+            "alerted_creators": getattr(self, "alerted_creators", {}), "alerted_names": getattr(self, "alerted_names", {}),
         }
         tmp = path.with_suffix(".tmp")
         with open(tmp, "wb") as f:
@@ -594,6 +636,8 @@ class Learner:
         self.lgbm_version = st["lgbm_version"]
         if not keep_runtime:
             self.alerted_mints = st["alerted_mints"]
+            self.alerted_creators = st.get("alerted_creators", {})
+            self.alerted_names = st.get("alerted_names", {})
             self.alerts_day = st["alerts_day"]
             self.counter = st["counter"]
             self.cache = st["cache"]
