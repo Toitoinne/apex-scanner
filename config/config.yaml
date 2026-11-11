@@ -43,6 +43,7 @@ ingestion:
     monthly_credit_cap: 980000      # plafond TOTAL Helius (enrichissement + secours) < 1 M gratuits
     backup_reserve_credits: 150000  # l'enrichissement s'arrête avant d'entamer cette réserve du secours
   reconnect_backoff_s: [1, 2, 5, 10, 30]
+  reconnect_reset_after_s: 10      # connexion tenue ≥ 10 s : coupure normale, reconnexion immédiate
   dedupe_ttl_s: 900
   stream_maxlen: 300000            # ~2 h de flux en mémoire Redis (petit VPS)
 

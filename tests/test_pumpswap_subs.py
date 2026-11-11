@@ -72,3 +72,24 @@ def test_connection_reopened_before_rpc_limit(monkeypatch):
     monkeypatch.setattr(svc.websockets, "connect", lambda *a, **k: ws)
     asyncio.run(asyncio.wait_for(ing.pumpswap(0), 10))         # se termine seule, sans coupure du RPC
     assert len(ws.sent) == 90 and all(m["method"] == "logsSubscribe" for m in ws.sent)
+
+
+def test_normal_cut_reconnects_immediately():
+    """11/11 : le RPC public coupe les connexions PumpSwap toutes les 20-50 s ; avec un seuil de 60 s,
+    l'attente montait à 30 s et les pools restaient ~40 % du temps sans trades en direct."""
+    from apex.ingestor.service import backoff_attempt
+    backoff = [1, 2, 5, 10, 30]
+    attempt = 0
+    waits = []
+    for _ in range(6):                      # 6 connexions qui tiennent ~25 s puis sont coupées
+        attempt = backoff_attempt(attempt, 25.0, 10)
+        waits.append(backoff[min(attempt, len(backoff) - 1)])
+        attempt += 1
+    assert waits == [1] * 6
+    attempt = 0
+    waits = []
+    for _ in range(6):                      # échecs immédiats (connexion refusée) : attente croissante
+        attempt = backoff_attempt(attempt, 0.5, 10)
+        waits.append(backoff[min(attempt, len(backoff) - 1)])
+        attempt += 1
+    assert waits == [1, 2, 5, 10, 30, 30]

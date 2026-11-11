@@ -112,12 +112,23 @@ def expand_ws_urls(urls: list[str], copies: int) -> list[str]:
     return [u for k in range(copies) for u in urls] if copies > 1 else list(urls)
 
 
+def backoff_attempt(attempt: int, lived_s: float, reset_after_s: float) -> int:
+    """Rang d'attente avant la reconnexion. Une connexion qui a tenu `reset_after_s` secondes a bien
+    fonctionné : sa coupure est normale (le RPC public ferme les connexions PumpSwap toutes les 20-50 s,
+    « 1002 invalid status code ») → reconnexion immédiate. Jusqu'au 11/11 le seuil était 60 s : ces
+    coupures faisaient grimper l'attente jusqu'à 30 s, les pools restaient sans trades en direct ~40 %
+    du temps et le dernier prix après migration était périmé (audit : 3 à 6 % d'écart à la blockchain).
+    Les échecs rapides (connexion refusée, coupure immédiate) gardent l'attente croissante."""
+    return 0 if lived_s >= reset_after_s else attempt
+
+
 class Ingestor:
     def __init__(self, cfg: Config, bus: B.Bus):
         self.cfg, self.bus = cfg, bus
         ing = cfg["ingestion"]
         self.dedupe = Deduper(bus, ing["dedupe_ttl_s"])
         self.backoff = ing["reconnect_backoff_s"]
+        self.reset_after_s = ing.get("reconnect_reset_after_s", 10)
         self.maxlen = ing["stream_maxlen"]
         self.stats: dict[str, Any] = {"events": 0, "dupes": 0, "late": 0, "reconnects": 0, "bytes": {}}
         self.late_slots = ing.get("late_slots", 4)
@@ -173,8 +184,7 @@ class Ingestor:
                 raise
             except Exception as e:  # noqa: BLE001
                 self.stats["reconnects"] += 1
-                if time.time() - started > 60:
-                    attempt = 0       # la connexion avait tenu : coupure normale, on se reconnecte tout de suite
+                attempt = backoff_attempt(attempt, time.time() - started, self.reset_after_s)
                 wait = self.backoff[min(attempt, len(self.backoff) - 1)]
                 log.warning("%s déconnecté (%s) — reconnexion dans %ss", name, e, wait)
                 await self.bus.r.hincrby("apex:ingestor:reconnects", name, 1)
