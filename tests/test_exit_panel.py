@@ -155,3 +155,11 @@ def test_sorties_ranks_tested_strategies_first():
     sel = [mk("NEUVE", 1, 10, 0.05), mk("ANCIENNE", 2, 4000, -0.08)]
     msg = EB.render({"selection": sel, "toutes": sel, "heures": 48})
     assert "1. ANCIENNE" in msg and "NEUVE" not in msg.split("(+")[0] and "1 nouvelle(s) variante(s)" in msg
+
+
+def test_trail35_retired_from_panel():
+    """20/11 : les stops suiveurs −35 % (durablement derniers) ne sont plus simulés ni proposés au choix."""
+    pols = build_panel(Config.load()["exits"])
+    assert "SUIVEUR35_DES_X1" not in pols and "SUIVEUR35_DES_X1.5" not in pols
+    for keep in ("SUIVEUR15_DES_X1", "SUIVEUR25_DES_X1", "SUIVEUR50_DES_X1.5"):
+        assert keep in pols                           # les autres stops suiveurs restent

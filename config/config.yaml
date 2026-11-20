@@ -92,7 +92,9 @@ exits:
                            description: "tout garder tant que le bot pense que ça monte, tout vendre quand il juge la hausse finie"}
   # PANEL de stratégies générées (≈ 35 de plus) : objectif fixe, sortie au temps, stop suiveur, sécurisation
   # de la mise, paliers, sortie apprise plus ou moins prudente. Toutes simulées sur chaque décision alertable.
-  panel: {enabled: true}
+  # 20/11 : stops suiveurs −35 % retirés (SUIVEUR35_DES_X1 / X1.5 : derniers sur 24 h, −6,4 % par trade,
+  # parmi les pires de la sélection et plus faibles notes du choix automatique)
+  panel: {enabled: true, trail: [0.15, 0.25, 0.5]}
   # ÉVOLUTION : toutes les 12 h, variantes des meilleures stratégies (réglages modifiés), retrait des
   # variantes qui échouent ; jusqu'à 12 variantes en test en plus des stratégies de base (jamais retirées)
   evolution: {enabled: true, every_s: 43200, cap: 12}
