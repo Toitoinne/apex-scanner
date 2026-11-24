@@ -9,7 +9,7 @@ from apex.trading.exits import Policy, PolicyState, build_panel
 
 def test_panel_is_large_and_valid():
     pols = build_panel(Config.load()["exits"])
-    assert len(pols) >= 34                            # 22/11 : 36 après retrait des perdantes durables
+    assert len(pols) >= 34                            # 24/11 : 34 après retrait des perdantes durables
     for name, c in pols.items():
         Policy.from_cfg(name, c)                      # chaque stratégie est lisible
     for keep in ("TP2_SL50", "RECUP_TRAIL40", "RECUP_TRAIL25", "ECHELLE", "MOONSHOT", "SORTIE_APPRISE", "SORTIE_APPRISE_LIBRE"):
@@ -161,7 +161,7 @@ def test_trail35_retired_from_panel():
     """20/11 : les stops suiveurs −35 % (durablement derniers) ne sont plus simulés ni proposés au choix."""
     pols = build_panel(Config.load()["exits"])
     assert "SUIVEUR35_DES_X1" not in pols and "SUIVEUR35_DES_X1.5" not in pols
-    for keep in ("SUIVEUR15_DES_X1", "SUIVEUR50_DES_X1.5"):
+    for keep in ("SUIVEUR15_DES_X1", "SUIVEUR15_DES_X1.5"):
         assert keep in pols                           # les autres stops suiveurs restent
 
 
@@ -177,5 +177,13 @@ def test_trail25_retired_from_panel():
     """22/11 : les stops suiveurs −25 % (durablement avant-derniers) ne sont plus simulés ni proposés au choix."""
     pols = build_panel(Config.load()["exits"])
     assert "SUIVEUR25_DES_X1" not in pols and "SUIVEUR25_DES_X1.5" not in pols
-    for keep in ("SUIVEUR15_DES_X1", "SUIVEUR15_DES_X1.5", "SUIVEUR50_DES_X1", "SUIVEUR50_DES_X1.5"):
-        assert keep in pols                           # les stops suiveurs −15 % et −50 % restent
+    for keep in ("SUIVEUR15_DES_X1", "SUIVEUR15_DES_X1.5"):
+        assert keep in pols                           # les stops suiveurs −15 % restent
+
+
+def test_trail50_retired_from_panel():
+    """24/11 : les stops suiveurs purs −50 % (parmi les pires du classement) ne sont plus simulés ni proposés au choix."""
+    pols = build_panel(Config.load()["exits"])
+    assert "SUIVEUR50_DES_X1" not in pols and "SUIVEUR50_DES_X1.5" not in pols
+    for keep in ("SUIVEUR15_DES_X1", "SUIVEUR15_DES_X1.5", "RECUP_TRAIL40", "ECHELLE", "MOONSHOT"):
+        assert keep in pols                           # le stop suiveur −15 % et les stratégies à suiveur large restent
