@@ -94,7 +94,9 @@ exits:
   # de la mise, paliers, sortie apprise plus ou moins prudente. Toutes simulées sur chaque décision alertable.
   # 20/11 : stops suiveurs −35 % retirés (SUIVEUR35_DES_X1 / X1.5 : derniers sur 24 h, −6,4 % par trade,
   # parmi les pires de la sélection et plus faibles notes du choix automatique)
-  panel: {enabled: true, trail: [0.15], time_stop_s: [120, 300]}
+  # 25/11 : variantes « sortie apprise libre » du panel retirées (SORTIE_APPRISE_LIBRE_25 / _50 : dernières sur 24 h,
+  # −7,3 % / −6,8 % par trade, parmi les pires de la sélection) ; SORTIE_APPRISE_LIBRE (base) est gardée
+  panel: {enabled: true, trail: [0.15], time_stop_s: [120, 300], learned_libre_thresholds: []}
   # ÉVOLUTION : toutes les 12 h, variantes des meilleures stratégies (réglages modifiés), retrait des
   # variantes qui échouent ; jusqu'à 12 variantes en test en plus des stratégies de base (jamais retirées)
   evolution: {enabled: true, every_s: 43200, cap: 12}

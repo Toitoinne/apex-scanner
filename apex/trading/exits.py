@@ -257,6 +257,8 @@ def build_panel(ex: dict, evolved: dict[str, dict] | None = None) -> dict[str, d
             {"stop_loss": 0.5, "take_profits": [[2.0, 0.5]], "trail": 0.5, "trail_activate": 2.0, "time_limit_s": 86400,
              "learned_exit": True, "hold_threshold": thr, "min_hold_s": 30,
              "description": f"récupérer la mise à x2, puis vendre quand ses chances de hausse passent sous {thr:.0%}"})
+        if thr not in pan.get("learned_libre_thresholds", pan.get("learned_thresholds", [0.25, 0.5])):
+            continue                                                      # 25/11 : variantes « libres » retirables
         add(f"SORTIE_APPRISE_LIBRE_{k}",
             {"stop_loss": 0.5, "take_profits": [], "trail": 0.5, "trail_activate": 3.0, "time_limit_s": 86400,
              "learned_exit": True, "hold_threshold": thr, "min_hold_s": 30,

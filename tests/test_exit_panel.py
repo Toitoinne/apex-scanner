@@ -9,7 +9,7 @@ from apex.trading.exits import Policy, PolicyState, build_panel
 
 def test_panel_is_large_and_valid():
     pols = build_panel(Config.load()["exits"])
-    assert len(pols) >= 34                            # 24/11 : 34 après retrait des perdantes durables
+    assert len(pols) >= 32                            # 25/11 : 32 après retrait des perdantes durables
     for name, c in pols.items():
         Policy.from_cfg(name, c)                      # chaque stratégie est lisible
     for keep in ("TP2_SL50", "RECUP_TRAIL40", "RECUP_TRAIL25", "ECHELLE", "MOONSHOT", "SORTIE_APPRISE", "SORTIE_APPRISE_LIBRE"):
@@ -187,3 +187,14 @@ def test_trail50_retired_from_panel():
     assert "SUIVEUR50_DES_X1" not in pols and "SUIVEUR50_DES_X1.5" not in pols
     for keep in ("SUIVEUR15_DES_X1", "SUIVEUR15_DES_X1.5", "RECUP_TRAIL40", "ECHELLE", "MOONSHOT"):
         assert keep in pols                           # le stop suiveur −15 % et les stratégies à suiveur large restent
+
+
+def test_learned_libre_variants_retired_from_panel():
+    """25/11 : les variantes « sortie apprise libre » du panel (dernières sur 24 h) ne sont plus simulées ni proposées."""
+    pols = build_panel(Config.load()["exits"])
+    assert "SORTIE_APPRISE_LIBRE_25" not in pols and "SORTIE_APPRISE_LIBRE_50" not in pols
+    for keep in ("SORTIE_APPRISE", "SORTIE_APPRISE_LIBRE", "SORTIE_APPRISE_25", "SORTIE_APPRISE_50"):
+        assert keep in pols                           # la sortie apprise reste testée (base + variantes prudentes)
+    # sans le réglage, le comportement d'origine est conservé
+    pols = build_panel({"policies": {}, "panel": {"enabled": True}})
+    assert "SORTIE_APPRISE_LIBRE_25" in pols and "SORTIE_APPRISE_LIBRE_50" in pols
